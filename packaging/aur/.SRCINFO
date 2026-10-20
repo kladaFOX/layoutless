@@ -1,6 +1,6 @@
 pkgbase = layoutless
 	pkgdesc = Punto Switcher-style automatic us/ru keyboard layout correction for Hyprland
-	pkgver = 0.1.1
+	pkgver = 0.1.2
 	pkgrel = 1
 	url = https://github.com/kladaFOX/layoutless
 	install = layoutless.install
@@ -14,7 +14,7 @@ pkgbase = layoutless
 	depends = hyprland
 	depends = libnotify
 	optdepends = omarchy: bar widget, install with `omarchy plugin add https://github.com/kladaFOX/layoutless`
-	source = layoutless-0.1.1.tar.gz::https://github.com/kladaFOX/layoutless/archive/refs/tags/v0.1.1.tar.gz
-	sha256sums = fab65fd634b1632928349bc1afe9d349f9401e1255d13b763a81ddc6fa4650dc
+	source = layoutless-0.1.2.tar.gz::https://github.com/kladaFOX/layoutless/archive/refs/tags/v0.1.2.tar.gz
+	sha256sums = 2fd0f8b09ceab0649d90efd6a3594cdc60c28843ecf55fa0d0b3170955f14f81
 
 pkgname = layoutless
