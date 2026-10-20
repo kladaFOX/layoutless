@@ -10,6 +10,8 @@ use crate::detect::{Detector, Params, Verdict};
 use crate::keymap::{self, KeyClass, Lang, Stroke};
 use crate::output::{Output, VIRTUAL_HYPR_NAME};
 use crate::config::{self, Config};
+use crate::control::Subscribers;
+use crate::rules::{self, Rules};
 use crate::{control, hypr, input};
 
 pub enum Msg {
@@ -53,7 +55,8 @@ pub fn run() -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel::<Msg>();
 
     // Bind first: it fails if another daemon is already running.
-    control::serve(tx.clone())?;
+    let events = Subscribers::default();
+    control::serve(tx.clone(), events.clone())?;
     let detector = Detector::new(Params::default())?;
     let out = Output::new()?;
     input::watch(tx.clone());
@@ -72,6 +75,9 @@ pub fn run() -> std::io::Result<()> {
         app: hypr::active_class().unwrap_or_default(),
         open_layers: Vec::new(),
         config,
+        rules: Rules::load(),
+        events,
+        last_action: None,
         correct_wait,
         mods: Mods::default(),
         held: Vec::new(),
@@ -181,6 +187,16 @@ impl Pending {
     }
 }
 
+struct Action {
+    word: Vec<Stroke>,
+    /// An auto-correction (vs a manual flip).
+    auto: bool,
+    /// The layout the word was retyped in.
+    to: Lang,
+    /// A manual flip that counted as a learning vote.
+    voted: bool,
+}
+
 struct Core {
     out: Output,
     layouts: hypr::LayoutWatcher,
@@ -191,6 +207,12 @@ struct Core {
     app: String,
     /// Namespaces of the open layer-shell surfaces.
     open_layers: Vec<String>,
+    rules: Rules,
+    /// Event stream for the bar widget.
+    events: Subscribers,
+    /// The last retype, while nothing was typed after it: tells an undo or
+    /// a toggle from a fresh flip, for learning.
+    last_action: Option<Action>,
     /// How long an auto-correction waits for the keys to be released.
     correct_wait: Duration,
     mods: Mods,
@@ -211,6 +233,7 @@ impl Core {
     fn reset(&mut self) {
         self.clear_word();
         self.last = None;
+        self.last_action = None;
         self.cancel_pending();
     }
 
@@ -280,6 +303,12 @@ impl Core {
             "auto on" => self.set_auto(true),
             "auto off" => self.set_auto(false),
             "auto toggle" => self.set_auto(!self.auto),
+            "state" => self.state().to_string(),
+            "rules list" => {
+                let list: Vec<_> = self.rules.list().iter().map(rules::describe).collect();
+                serde_json::json!({ "rules": list }).to_string()
+            }
+            c if c.starts_with("rules ") => self.rules_command(&c["rules ".len()..]),
             "status" => format!(
                 "auto {}, layout {}, app {:?}{}",
                 if self.auto { "on" } else { "off" },
@@ -289,6 +318,8 @@ impl Core {
             ),
             "reload" => {
                 self.config = config::load();
+                self.rules = Rules::load();
+                self.events.send(&self.state());
                 format!("reloaded: {} apps, {} layers excluded", self.config.exclude_apps.len(), self.config.exclude_layers.len())
             }
             other => format!("unknown command: {other}"),
@@ -305,7 +336,87 @@ impl Core {
 
     fn set_auto(&mut self, on: bool) -> String {
         self.auto = on;
+        self.events.send(&self.state());
         format!("auto {}", if on { "on" } else { "off" })
+    }
+
+    fn state(&self) -> serde_json::Value {
+        serde_json::json!({ "event": "state", "auto": self.auto, "rules": self.rules.list().len() })
+    }
+
+    /// `add WORD`, `rm WORD`, `set KEYS en|ru`. A word given as text belongs
+    /// to the layout of its script: `add next` keeps `next` (and turns
+    /// `туче` into it), `add туче` does the opposite.
+    fn rules_command(&mut self, args: &str) -> String {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        let keys_of = |word: &str, lang: Lang| {
+            keymap::strokes_for_word(word, lang).and_then(|w| keymap::key_string(&w))
+        };
+        let changed = match parts.as_slice() {
+            ["add", word] => {
+                let lang = if word.chars().any(|c| c.is_ascii_alphabetic()) { Lang::En } else { Lang::Ru };
+                match keys_of(word, lang) {
+                    Some(keys) => self.rules.set(&keys, lang).keys,
+                    None => return format!("error: {word:?} is not a word on the {lang:?} layout"),
+                }
+            }
+            ["rm", word] => {
+                let keys = [Lang::En, Lang::Ru].into_iter().filter_map(|l| keys_of(word, l)).find(|k| self.rules.remove(k));
+                match keys {
+                    Some(k) => k,
+                    None => return format!("error: no rule for {word:?}"),
+                }
+            }
+            ["set", keys, lang] => {
+                let lang = match *lang {
+                    "en" => Lang::En,
+                    "ru" => Lang::Ru,
+                    _ => return "error: layout must be en or ru".into(),
+                };
+                if keymap::from_key_string(keys).is_none() {
+                    return format!("error: bad keys {keys:?}");
+                }
+                self.rules.set(keys, lang).keys
+            }
+            _ => return "usage: rules list | add WORD | rm WORD | set KEYS en|ru".into(),
+        };
+        self.events.send(&self.state());
+        format!("ok {changed}")
+    }
+
+    /// A manual flip of `word` to `target`: count it as a learning vote,
+    /// unless it just toggles back the previous manual flip.
+    fn learn_from_flip(&mut self, word: Vec<Stroke>, target: Lang) {
+        let prev = self
+            .last_action
+            .take()
+            .filter(|a| keymap::key_string(&a.word) == keymap::key_string(&word));
+        let voted = match prev {
+            Some(a) if !a.auto => {
+                if a.voted {
+                    self.rules.unvote(&word, a.to);
+                }
+                false
+            }
+            // A fresh flip, or the undo of an auto-correction: either way the
+            // word belongs to `target`. Never learn from excluded apps.
+            _ if self.excluded() => false,
+            _ => {
+                if let Some(rule) = self.rules.vote(&word, target) {
+                    let mut event = rules::describe(&rule);
+                    if self.config.notify {
+                        let (en, ru) = (event["en"].as_str().unwrap_or(""), event["ru"].as_str().unwrap_or(""));
+                        let (from, to) = if rule.lang == Lang::En { (ru, en) } else { (en, ru) };
+                        notify(&format!("Learned: {from} → {to}"));
+                    }
+                    event["event"] = "learned".into();
+                    self.events.send(&event);
+                    self.events.send(&self.state());
+                }
+                true
+            }
+        };
+        self.last_action = Some(Action { word, auto: false, to: target, voted });
     }
 
     fn key(&mut self, key: KeyCode, value: i32) {
@@ -324,6 +435,7 @@ impl Core {
         if key == KeyCode::KEY_SPACE && self.mods.alt_only() {
             return;
         }
+        self.last_action = None;
 
         let stroke = Stroke { key, shift: self.mods.shift() };
         // Shortcuts (Ctrl+C, Super+1, ...) only clear the buffer. Letters typed
@@ -387,7 +499,12 @@ impl Core {
 
         if self.auto && !tainted && !self.excluded() {
             let cur = Lang::from_index(self.layouts.current_index());
-            let verdict = self.detector.decide(&word, cur);
+            // A learned rule beats the detector.
+            let verdict = match self.rules.lookup(&word) {
+                Some(lang) if lang == cur => Verdict::Keep,
+                Some(_) => Verdict::Flip,
+                None => self.detector.decide(&word, cur),
+            };
             if self.debug {
                 let (en, ru) = keymap::render(&word);
                 eprintln!("  {en} / {ru} typed in {cur:?}: {verdict:?}");
@@ -436,6 +553,9 @@ impl Core {
                         Err(e) => eprintln!("correction failed: {e}"),
                     }
                     // Alt+Space right after a correction flips the word back.
+                    if tail.is_empty() {
+                        self.last_action = Some(Action { word: word.clone(), auto: true, to: target, voted: false });
+                    }
                     self.replay_state(word, boundary, &tail);
                 }
             }
@@ -448,16 +568,18 @@ impl Core {
         if hypr::is_locked().unwrap_or(true) {
             return Ok("screen is locked".into());
         }
-        let keys = if !self.word.is_empty() {
-            self.word.clone()
+        let (word, keys) = if !self.word.is_empty() {
+            (self.word.clone(), self.word.clone())
         } else if let Some((w, b)) = &self.last {
-            [&w[..], &[*b]].concat()
+            (w.clone(), [&w[..], &[*b]].concat())
         } else {
             // Don't switch the layout either: Alt+Space is not a layout switcher.
             return Ok("nothing to flip".into());
         };
         let target = Lang::from_index(self.layouts.current_index()).other();
-        self.retype(keys.len(), &keys, target)
+        let answer = self.retype(keys.len(), &keys, target)?;
+        self.learn_from_flip(word, target);
+        Ok(answer)
     }
 
     /// Erase `erase` chars, switch to `target`, type `keys`.
@@ -491,4 +613,17 @@ impl Core {
             Msg::HyprGone => eprintln!("[dbg {t:9.1}] hyprland gone"),
         }
     }
+}
+
+/// Show a desktop notification without blocking the key path.
+fn notify(body: &str) {
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let status = std::process::Command::new("notify-send")
+            .args(["--app-name=layoutless", "--expire-time=3000", "layoutless", &body])
+            .status();
+        if let Err(e) = status {
+            eprintln!("notify-send: {e}");
+        }
+    });
 }

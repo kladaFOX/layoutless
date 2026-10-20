@@ -9,6 +9,8 @@ use serde::Deserialize;
 pub struct Config {
     /// Auto-correction on start. `layoutless auto on|off` changes it at runtime.
     pub auto: bool,
+    /// A desktop notification when a word is learned.
+    pub notify: bool,
     /// Window classes (as in `hyprctl activewindow`) where words are never
     /// auto-corrected. Case-insensitive.
     pub exclude_apps: Vec<String>,
@@ -21,6 +23,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             auto: true,
+            notify: true,
             exclude_apps: [
                 "org.keepassxc.KeePassXC",
                 "1Password",

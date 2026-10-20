@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "kladafox.layoutless",
+  "name": "Layoutless",
+  "version": "0.1.0",
+  "author": "kladafox",
+  "license": "MIT",
+  "description": "Automatic us/ru keyboard layout correction, Punto Switcher style. Bar icon to pause auto-correction and edit the learned words.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Layoutless",
+    "description": "Keyboard icon, dimmed while auto-correction is paused. Left click opens the learned words; right click pauses or resumes auto-correction.",
+    "category": "Input",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

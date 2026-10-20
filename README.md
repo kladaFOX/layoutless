@@ -4,7 +4,7 @@ Automatic keyboard layout correction for [Omarchy](https://omarchy.org/) / Hyprl
 
 Type without thinking about the layout. When a word comes out in the wrong one (`ghbdtn` → `привет`, `руддщ` → `hello`), layoutless retypes it in the right layout and switches the layout for you.
 
-> Status: early development. Auto-correction and manual flip with `Alt+Space` work. Learning and the bar widget are not there yet.
+> Status: early development. Auto-correction, manual flip with `Alt+Space`, learning and the bar widget work. Not packaged yet.
 
 ## Features
 
@@ -77,6 +77,7 @@ o.bind("ALT + SPACE", "Layoutless: flip last word", "layoutless flip")
 
 ```toml
 auto = true                      # auto-correction on start
+notify = true                    # desktop notification when a word is learned
 exclude_apps = [                 # window classes, as in `hyprctl activewindow`
   "org.keepassxc.KeePassXC", "1Password", "Bitwarden",
   "gcr-prompter", "pinentry-qt", "pinentry-gtk",
@@ -84,7 +85,23 @@ exclude_apps = [                 # window classes, as in `hyprctl activewindow`
 exclude_layers = ["omarchy-polkit"]  # shell popups, e.g. the polkit password prompt
 ```
 
-Commands: `layoutless auto on|off|toggle`, `layoutless status`, `layoutless flip`.
+Commands: `layoutless auto on|off|toggle`, `layoutless status`, `layoutless flip`,
+`layoutless rules [list | add WORD | rm WORD]`.
+
+Learned words live in `~/.local/share/layoutless/rules.json`. `rules add next` makes
+`next` always come out as `next` (typing `туче` turns into it); `rules add привет` does the
+opposite for a Russian word.
+
+### Bar widget (from source)
+
+```bash
+mkdir -p ~/.config/omarchy/plugins/kladafox.layoutless
+cp manifest.json BarWidget.qml ~/.config/omarchy/plugins/kladafox.layoutless/
+omarchy bar put kladafox.layoutless
+```
+
+Left click opens the learned words (add, forget, or move a word to the other layout); right
+click pauses or resumes auto-correction. The icon is dimmed while paused.
 
 ## License
 

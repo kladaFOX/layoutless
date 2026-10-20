@@ -12,18 +12,28 @@ mod hypr;
 mod input;
 mod keymap;
 mod output;
+mod rules;
 
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: layoutless [daemon | flip | auto on|off|toggle | status | reload | eval FILE...]";
+const USAGE: &str = "usage: layoutless [daemon | flip | auto on|off|toggle | status | reload
+                  | rules [list [--json] | add WORD | rm WORD | set KEYS en|ru]
+                  | subscribe | eval FILE...]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] | ["daemon"] => daemon::run(),
-        ["flip"] | ["status"] | ["reload"] | ["auto", "on" | "off" | "toggle"] => {
+        ["flip"] | ["status"] | ["state"] | ["reload"] | ["auto", "on" | "off" | "toggle"] => {
             control::request(&args.join(" ")).map(|reply| println!("{reply}"))
         }
+        ["rules"] | ["rules", "list"] => control::request("rules list").and_then(|r| print_rules(&r)),
+        ["rules", "list", "--json"] => control::request("rules list").map(|r| println!("{r}")),
+        ["rules", "add" | "rm", _] | ["rules", "set", _, _] => control::request(&args.join(" ")).and_then(|reply| {
+            println!("{reply}");
+            if reply.starts_with("error") { Err(std::io::Error::other("rules command failed")) } else { Ok(()) }
+        }),
+        ["subscribe"] => control::subscribe(),
         ["eval", ..] => eval::run(&args[1..]),
         ["-h" | "--help"] => {
             println!("{USAGE}");
@@ -41,4 +51,19 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `rules list` for people: one rule per line, the word as it belongs first.
+fn print_rules(reply: &str) -> std::io::Result<()> {
+    let v: serde_json::Value = serde_json::from_str(reply).map_err(|_| std::io::Error::other(reply.to_string()))?;
+    let rules = v["rules"].as_array().cloned().unwrap_or_default();
+    if rules.is_empty() {
+        println!("no rules yet");
+    }
+    for r in rules {
+        let (en, ru) = (r["en"].as_str().unwrap_or(""), r["ru"].as_str().unwrap_or(""));
+        let (word, other) = if r["lang"] == "en" { (en, ru) } else { (ru, en) };
+        println!("{word:<20} ← {other}");
+    }
+    Ok(())
 }

@@ -129,7 +129,8 @@ pub fn render(word: &[Stroke]) -> (String, String) {
     (en, ru)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Lang {
     En,
     Ru,
@@ -173,4 +174,28 @@ pub fn stroke_for(c: char, lang: Lang) -> Option<Stroke> {
             (c == lower).then_some(Stroke { key, shift: false })
         }
     })
+}
+
+/// The layout-independent name of a word: its keys as unshifted en chars
+/// (`next` and `туче` are both `next`). None if the word has keys that
+/// aren't letters in ru (digits, `-`, ...): such words are never learned.
+pub fn key_string(word: &[Stroke]) -> Option<String> {
+    word.iter()
+        .map(|s| TABLE.iter().find(|(k, ..)| *k == s.key).map(|&(_, e, ..)| e))
+        .collect()
+}
+
+/// Inverse of `key_string`.
+pub fn from_key_string(keys: &str) -> Option<Vec<Stroke>> {
+    keys.chars()
+        .map(|c| TABLE.iter().find(|&&(_, e, ..)| e == c).map(|&(key, ..)| Stroke { key, shift: false }))
+        .collect()
+}
+
+/// The keystrokes that type `word` in `lang`, or None if a char isn't a
+/// letter key there (or isn't on the layout at all).
+pub fn strokes_for_word(word: &str, lang: Lang) -> Option<Vec<Stroke>> {
+    word.chars()
+        .map(|c| stroke_for(c, lang).filter(|s| is_word_key(s.key)))
+        .collect()
 }
