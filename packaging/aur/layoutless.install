@@ -1,0 +1,19 @@
+post_install() {
+  # Make /dev/uinput usable right away instead of after a reboot.
+  modprobe uinput 2>/dev/null || true
+  udevadm control --reload 2>/dev/null || true
+  udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
+
+  cat <<'MSG'
+==> layoutless reads your keyboards, so your user must be in the `input` group:
+      sudo usermod -aG input "$USER"      (then log out and back in)
+==> Then start the daemon:
+      systemctl --user enable --now layoutless
+==> Omarchy bar widget:
+      omarchy plugin add https://github.com/kladaFOX/layoutless --enable
+MSG
+}
+
+post_upgrade() {
+  echo "==> Restart the daemon: systemctl --user restart layoutless"
+}

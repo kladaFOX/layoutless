@@ -1,0 +1,38 @@
+# Maintainer: Ilya Klapatok <klapatok1980@gmail.com>
+pkgname=layoutless
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Punto Switcher-style automatic us/ru keyboard layout correction for Hyprland"
+arch=('x86_64' 'aarch64')
+url="https://github.com/kladaFOX/layoutless"
+license=('MIT' 'CC-BY-SA-4.0')
+depends=('gcc-libs' 'glibc' 'hyprland' 'libnotify')
+makedepends=('cargo')
+optdepends=('omarchy: bar widget, install with `omarchy plugin add https://github.com/kladaFOX/layoutless`')
+install=layoutless.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver/daemon"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver/daemon"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 daemon/target/release/layoutless "$pkgdir/usr/bin/layoutless"
+  install -Dm644 dist/layoutless.service "$pkgdir/usr/lib/systemd/user/layoutless.service"
+  install -Dm644 dist/60-layoutless.rules "$pkgdir/usr/lib/udev/rules.d/60-layoutless.rules"
+  install -Dm644 dist/modules-load.conf "$pkgdir/usr/lib/modules-load.d/layoutless.conf"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 daemon/data/README.md "$pkgdir/usr/share/licenses/$pkgname/word-lists.md"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

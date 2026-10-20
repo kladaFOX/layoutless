@@ -2,9 +2,11 @@
 
 Automatic keyboard layout correction for [Omarchy](https://omarchy.org/) / Hyprland, in the spirit of Punto Switcher.
 
+![layoutless](preview.png)
+
 Type without thinking about the layout. When a word comes out in the wrong one (`ghbdtn` → `привет`, `руддщ` → `hello`), layoutless retypes it in the right layout and switches the layout for you.
 
-> Status: early development. Auto-correction, manual flip with `Alt+Space`, learning and the bar widget work. Not packaged yet.
+> Status: 0.1, early. Works day to day on the author's machine; expect rough edges.
 
 ## Features
 
@@ -12,7 +14,7 @@ Type without thinking about the layout. When a word comes out in the wrong one (
 - **Force flip with `Alt+Space`.** If layoutless guessed wrong or missed a word, press `Alt+Space` to flip the last word. Right after an auto-correction, `Alt+Space` undoes it instead.
 - **Learns your words.** If you flip the same word by hand twice, layoutless remembers which layout it belongs to. For example, `next` typed in the Russian layout comes out as `туче`, which is a valid Russian word, so a dictionary alone would never flip it. After two manual flips it always does. Undoing an auto-correction twice teaches it to leave that word alone.
 - **Works everywhere you type.** It works in browsers, terminals, Electron and JetBrains apps, because it uses only Backspace and replays the same physical keys after switching the layout.
-- **Omarchy bar widget.** The widget shows the current layout and whether auto mode is on. Click it to pause auto mode, and open its panel to manage learned words and excluded apps.
+- **Omarchy bar widget.** A keyboard icon, dimmed while auto-correction is paused. Its panel pauses auto-correction, turns it off for the current app, and edits the learned words.
 
 Supported layouts: `us` + `ru` for now. The design keeps layout pairs pluggable.
 
@@ -22,7 +24,7 @@ Supported layouts: `us` + `ru` for now. The design keeps layout pairs pluggable.
 physical keyboard ──evdev (read-only)──▶ layoutless daemon ──uinput──▶ Backspace × N, replay keys
                                             │  ▲
                 Hyprland IPC (socket2) ─────┘  └── `layoutless flip` (Alt+Space bind)
-                activelayout / activewindow       `layoutless ctl …` (bar widget)
+                activelayout / activewindow       `layoutless subscribe` (bar widget)
 ```
 
 1. The daemon passively reads key events from your physical keyboards and keeps the physical keys of the word being typed. It never grabs the keyboard, so typing is never delayed.
@@ -40,34 +42,58 @@ layoutless has to see what you type, so its rules are strict:
 
 ## Install
 
-_Not released yet._ The planned install has two parts:
+layoutless has two parts: the daemon (does the work) and the Omarchy bar widget (optional UI).
+
+### Dependencies
+
+- Hyprland (the daemon talks to its IPC sockets). Omarchy is needed only for the bar widget.
+- `libnotify` for the "word learned" notification, `util-linux` (`setpriv`) for the widget.
+- Access to keyboards and `/dev/uinput`: your user in the `input` group, a udev rule and the
+  `uinput` module. `install.sh` sets these up.
+- To build: Rust (`omarchy pkg add rustup && rustup default stable`).
+
+### Daemon
 
 ```bash
-yay -S layoutless                                        # daemon, systemd user unit, udev rule
-omarchy plugin add https://github.com/kladaFOX/layoutless  # bar widget
+git clone https://github.com/kladaFOX/layoutless
+cd layoutless
+./install.sh
 ```
 
-### From source (for now)
+It builds the daemon and installs it for your user (`~/.local/bin/layoutless` and a systemd
+user service). Before using `sudo` it shows what it will do and asks: a udev rule for
+`/dev/uinput`, loading the `uinput` module, and adding you to the `input` group. Log out and
+back in once after the first install; the daemon starts by itself afterwards. Run it again
+after `git pull` to update.
 
-You need Rust and these permissions (then re-login):
-
-```bash
-sudo usermod -aG input "$USER"
-echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/60-layoutless.rules
-echo uinput | sudo tee /etc/modules-load.d/layoutless.conf
-```
-
-```bash
-cargo build --release --manifest-path daemon/Cargo.toml
-install -Dm755 daemon/target/release/layoutless ~/.local/bin/layoutless
-install -Dm644 dist/layoutless.service ~/.config/systemd/user/layoutless.service
-systemctl --user daemon-reload
-systemctl --user enable --now layoutless
-```
+An AUR package is prepared in `packaging/aur/` and will be published once AUR registration
+reopens.
 
 The daemon binds the flip key (`Alt+Space` by default, `flip_key` in the config) in Hyprland
-itself and re-binds it after every Hyprland config reload. Don't bind `layoutless flip` in
-`bindings.lua` as well: the flip would run twice and undo itself.
+itself and re-binds it after every Hyprland config reload; nothing is written to your Hyprland
+config. Don't also bind `layoutless flip` yourself: the flip would run twice and undo itself.
+
+### Bar widget
+
+```bash
+omarchy plugin add https://github.com/kladaFOX/layoutless --enable
+```
+
+Left click opens the panel: pause auto-correction, turn it off for the current app, and
+find, add, forget or move learned words to the other layout. Right click pauses or resumes
+auto-correction. The icon is dimmed while paused.
+
+## Uninstall
+
+```bash
+omarchy plugin remove kladafox.layoutless   # the bar widget
+./install.sh --uninstall                    # the daemon, service, udev rule and module config
+```
+
+Your settings (`~/.config/layoutless`) and learned words (`~/.local/share/layoutless`) are
+kept; delete them by hand if you don't want them. Leave the `input` group with
+`sudo gpasswd -d "$USER" input` if nothing else needs it. The flip key stays bound to a command
+that only prints "daemon not running" until the next Hyprland config reload or login.
 
 ## Configuration
 
@@ -91,18 +117,6 @@ Commands: `layoutless auto on|off|toggle`, `layoutless status`, `layoutless flip
 Learned words live in `~/.local/share/layoutless/rules.json`. `rules add next` makes
 `next` always come out as `next` (typing `туче` turns into it); `rules add привет` does the
 opposite for a Russian word.
-
-### Bar widget (from source)
-
-```bash
-mkdir -p ~/.config/omarchy/plugins/kladafox.layoutless
-cp manifest.json BarWidget.qml ~/.config/omarchy/plugins/kladafox.layoutless/
-omarchy bar put kladafox.layoutless
-```
-
-Left click opens the panel: pause auto-correction, turn it off for the current app, and
-find, add, forget or move learned words to the other layout. Right click pauses or resumes
-auto-correction. The icon is dimmed while paused.
 
 ## License
 

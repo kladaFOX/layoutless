@@ -5,7 +5,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/.local/bin/layoutless
+ExecStart=/usr/bin/layoutless
 # Exits when Hyprland goes away; the restart picks up the new instance.
 Restart=on-failure
 RestartSec=2
