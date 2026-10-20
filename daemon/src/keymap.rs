@@ -2,7 +2,13 @@
 
 use evdev::KeyCode;
 
-use crate::Stroke;
+/// One keystroke: physical key plus Shift state. Replaying strokes instead of
+/// characters means the output side needs no character tables.
+#[derive(Clone, Copy, Debug)]
+pub struct Stroke {
+    pub key: KeyCode,
+    pub shift: bool,
+}
 
 /// (key, en, EN, ru, RU)
 const TABLE: &[(KeyCode, char, char, char, char)] = &[

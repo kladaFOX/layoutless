@@ -1,11 +1,14 @@
-//! Hyprland IPC: layout switching (socket1) and layout events (socket2).
+//! Hyprland IPC: layout switching (socket1) and layout/focus events (socket2).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::daemon::Msg;
 
 fn socket_dir() -> std::io::Result<PathBuf> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(std::io::Error::other)?;
@@ -84,8 +87,9 @@ pub struct LayoutWatcher {
 
 impl LayoutWatcher {
     /// `watched` is our virtual keyboard: it is kept on the same layout as the
-    /// real keyboards, and `wait_event` waits for its layout events.
-    pub fn start(watched: &'static str) -> std::io::Result<Self> {
+    /// real keyboards, and `wait_event` waits for its layout events. Focus
+    /// changes and the socket closing are sent to `tx`.
+    pub fn start(watched: &'static str, tx: Sender<Msg>) -> std::io::Result<Self> {
         let snap = sync(watched)?;
         let reference = snap.reference;
         let state = Arc::new((
@@ -96,7 +100,11 @@ impl LayoutWatcher {
         let st = state.clone();
         thread::spawn(move || {
             for line in BufReader::new(stream).lines() {
-                let Ok(line) = line else { return };
+                let Ok(line) = line else { break };
+                if line.starts_with("activewindow>>") {
+                    let _ = tx.send(Msg::FocusChanged);
+                    continue;
+                }
                 let Some(rest) = line.strip_prefix("activelayout>>") else { continue };
                 let device = rest.split(',').next().unwrap_or("");
                 let (m, cv) = &*st;
@@ -111,6 +119,7 @@ impl LayoutWatcher {
                     }
                 }
             }
+            let _ = tx.send(Msg::HyprGone);
         });
         Ok(Self { state })
     }

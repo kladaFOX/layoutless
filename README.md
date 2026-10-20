@@ -4,7 +4,7 @@ Automatic keyboard layout correction for [Omarchy](https://omarchy.org/) / Hyprl
 
 Type without thinking about the layout. When a word comes out in the wrong one (`ghbdtn` → `привет`, `руддщ` → `hello`), layoutless retypes it in the right layout and switches the layout for you.
 
-> Status: early development (spike done, not usable yet). See [PLAN.md](PLAN.md).
+> Status: early development. Manual flip with `Alt+Space` works; auto-correction is not there yet. See [PLAN.md](PLAN.md).
 
 ## Features
 
@@ -33,7 +33,7 @@ physical keyboard ──evdev (read-only)──▶ layoutless daemon ──uinpu
 
 layoutless has to see what you type, so its rules are strict:
 
-- It keeps only the current and previous word, in memory only. It never logs or sends keystrokes anywhere.
+- It keeps only the current and previous word, in memory only. It never logs or sends keystrokes anywhere. The exception is `LAYOUTLESS_DEBUG=1`, a debugging mode that prints every key to stderr: never leave it on.
 - Learned rules (`~/.local/share/layoutless/rules.json`) store only words you flipped by hand. The file is plain JSON, so you can read and edit it.
 - Reading keyboards requires membership in the `input` group, and typing requires write access to `/dev/uinput`. Any program running as your user with these permissions can read every keystroke. That's the cost of a global layout corrector on Wayland.
 - Corrections are off on the lock screen, in password fields (detected via AT-SPI), and in excluded apps (password managers by default). Password fields switch to `us`, like macOS.
@@ -45,6 +45,24 @@ _Not released yet._ The planned install has two parts:
 ```bash
 yay -S layoutless                                        # daemon, systemd user unit, udev rule
 omarchy plugin add https://github.com/kladaFOX/layoutless  # bar widget
+```
+
+### From source (for now)
+
+You need Rust, the permissions from [PLAN.md → Permissions setup](PLAN.md#permissions-setup), and a re-login.
+
+```bash
+cargo build --release --manifest-path daemon/Cargo.toml
+install -Dm755 daemon/target/release/layoutless ~/.local/bin/layoutless
+install -Dm644 dist/layoutless.service ~/.config/systemd/user/layoutless.service
+systemctl --user daemon-reload
+systemctl --user enable --now layoutless
+```
+
+Then bind the flip key in `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("ALT + SPACE", "Layoutless: flip last word", "layoutless flip")
 ```
 
 ## License
