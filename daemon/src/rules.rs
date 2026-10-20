@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::keymap::{self, Lang, Stroke};
+use crate::private;
 
 /// Votes that never became a rule are forgotten after this long.
 const VOTE_TTL_SECS: u64 = 30 * 24 * 3600;
@@ -75,6 +76,13 @@ impl Rules {
                 }
             })
             .unwrap_or_default();
+        // Files written by older versions were world-readable.
+        if let Some(p) = &path {
+            let repaired = p.parent().map_or(Ok(()), private::ensure_dir).and_then(|()| private::restrict_file(p));
+            if let Err(e) = repaired {
+                eprintln!("{}: can't restrict permissions: {e}", p.display());
+            }
+        }
         let mut rules = Self { path, store };
         rules.expire_votes();
         rules
@@ -150,18 +158,14 @@ impl Rules {
         self.store.votes.retain(|v| v.updated_at >= cutoff);
     }
 
-    /// Write atomically: a crash mid-write never leaves a broken file.
+    /// Write atomically (a crash mid-write never leaves a broken file) and
+    /// owner-only.
     fn save(&mut self) {
         self.expire_votes();
         let Some(path) = &self.path else { return };
         let write = || -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            let tmp = path.with_extension("json.tmp");
             let json = serde_json::to_string_pretty(&self.store).map_err(std::io::Error::other)?;
-            std::fs::write(&tmp, json + "\n")?;
-            std::fs::rename(&tmp, path)
+            private::write(path, &(json + "\n"))
         };
         if let Err(e) = write() {
             eprintln!("{}: {e}", path.display());

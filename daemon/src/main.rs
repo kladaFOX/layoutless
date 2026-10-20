@@ -13,6 +13,7 @@ mod hypr;
 mod input;
 mod keymap;
 mod output;
+mod private;
 mod rules;
 
 use std::process::ExitCode;

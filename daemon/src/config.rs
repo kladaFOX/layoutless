@@ -89,10 +89,5 @@ pub fn save_exclude_apps(apps: &[String]) -> std::io::Result<()> {
         list.push(app.as_str());
     }
     doc["exclude_apps"] = toml_edit::value(list);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, doc.to_string())?;
-    std::fs::rename(&tmp, &path)
+    crate::private::write(&path, &doc.to_string())
 }
