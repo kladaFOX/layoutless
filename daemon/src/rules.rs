@@ -2,7 +2,8 @@
 //!
 //! A manual flip (Alt+Space) votes for the layout the word was flipped to;
 //! undoing an auto-correction votes for the layout it was typed in. At
-//! `LEARN_THRESHOLD` votes the word becomes a rule, which beats the detector.
+//! `learn_threshold` votes (config) the word becomes a rule, which beats the
+//! detector.
 //! Words are keyed by their keys (`keymap::key_string`), so `next` and
 //! `туче` are the same rule.
 
@@ -13,7 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::keymap::{self, Lang, Stroke};
 
-pub const LEARN_THRESHOLD: u32 = 2;
 /// Votes that never became a rule are forgotten after this long.
 const VOTE_TTL_SECS: u64 = 30 * 24 * 3600;
 
@@ -90,8 +90,8 @@ impl Rules {
     }
 
     /// Count a vote for `word` belonging to `lang`. Returns the rule if this
-    /// vote created or changed one.
-    pub fn vote(&mut self, word: &[Stroke], lang: Lang) -> Option<Rule> {
+    /// vote reached `threshold` and created or changed one.
+    pub fn vote(&mut self, word: &[Stroke], lang: Lang, threshold: u32) -> Option<Rule> {
         let keys = keymap::key_string(word)?;
         if self.store.rules.iter().any(|r| r.keys == keys && r.lang == lang) {
             return None;
@@ -107,7 +107,7 @@ impl Rules {
                 1
             }
         };
-        let learned = (count >= LEARN_THRESHOLD).then(|| self.set(&keys, lang));
+        let learned = (count >= threshold.max(1)).then(|| self.set(&keys, lang));
         self.save();
         learned
     }

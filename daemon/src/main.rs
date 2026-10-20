@@ -8,6 +8,7 @@ mod control;
 mod daemon;
 mod detect;
 mod eval;
+mod hotkey;
 mod hypr;
 mod input;
 mod keymap;

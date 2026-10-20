@@ -11,6 +11,7 @@ use crate::keymap::{self, KeyClass, Lang, Stroke};
 use crate::output::{Output, VIRTUAL_HYPR_NAME};
 use crate::config::{self, Config};
 use crate::control::Subscribers;
+use crate::hotkey::{self, Hotkey};
 use crate::rules::{self, Rules};
 use crate::{control, hypr, input};
 
@@ -20,6 +21,8 @@ pub enum Msg {
     Click,
     /// Another window got focus; its class.
     FocusChanged(String),
+    /// Hyprland reloaded its config, which drops binds added at runtime.
+    HyprConfigReloaded,
     /// A layer-shell surface (shell popup) opened (true) or closed; its namespace.
     Layer(String, bool),
     /// A control socket command; the reply goes back to the client.
@@ -65,7 +68,9 @@ pub fn run() -> std::io::Result<()> {
         .unwrap_or(Duration::from_millis(250))
         .saturating_sub(REPEAT_MARGIN)
         .max(Duration::from_millis(50));
-    eprintln!("ready, auto mode {}", if auto { "on" } else { "off" });
+    let hotkey = load_hotkey(&config);
+    bind_hotkey(&hotkey);
+    eprintln!("ready, auto mode {}, flip key {}", if auto { "on" } else { "off" }, hotkey.spec);
 
     let mut core = Core {
         out,
@@ -75,6 +80,7 @@ pub fn run() -> std::io::Result<()> {
         app: hypr::active_class().unwrap_or_default(),
         open_layers: Vec::new(),
         config,
+        hotkey,
         rules: Rules::load(),
         events,
         last_action: None,
@@ -120,6 +126,7 @@ pub fn run() -> std::io::Result<()> {
                     }
                 }
                 Msg::Command(cmd, reply) => core.command(&cmd, reply),
+                Msg::HyprConfigReloaded => bind_hotkey(&core.hotkey),
                 Msg::HyprGone => return Err(std::io::Error::other("Hyprland event socket closed")),
             }
         }
@@ -150,8 +157,9 @@ impl Mods {
         self.shift() || self.chord()
     }
 
-    fn alt_only(&self) -> bool {
-        self.alt && !self.ctrl && !self.meta && !self.shift()
+    /// Exactly the hotkey's modifiers are held.
+    fn exactly(&self, hk: &Hotkey) -> bool {
+        self.ctrl == hk.ctrl && self.alt == hk.alt && self.meta == hk.meta && self.shift() == hk.shift
     }
 
     /// Returns true if the key is a modifier (state updated).
@@ -203,6 +211,7 @@ struct Core {
     detector: Detector,
     auto: bool,
     config: Config,
+    hotkey: Hotkey,
     /// Class of the focused window.
     app: String,
     /// Namespaces of the open layer-shell surfaces.
@@ -318,6 +327,14 @@ impl Core {
             ),
             "reload" => {
                 self.config = config::load();
+                let hotkey = load_hotkey(&self.config);
+                if hotkey.spec != self.hotkey.spec {
+                    if let Err(e) = self.hotkey.unbind() {
+                        eprintln!("unbinding {}: {e}", self.hotkey.spec);
+                    }
+                    bind_hotkey(&hotkey);
+                    self.hotkey = hotkey;
+                }
                 self.rules = Rules::load();
                 self.events.send(&self.state());
                 format!("reloaded: {} apps, {} layers excluded", self.config.exclude_apps.len(), self.config.exclude_layers.len())
@@ -341,7 +358,13 @@ impl Core {
     }
 
     fn state(&self) -> serde_json::Value {
-        serde_json::json!({ "event": "state", "auto": self.auto, "rules": self.rules.list().len() })
+        serde_json::json!({
+            "event": "state",
+            "auto": self.auto,
+            "rules": self.rules.list().len(),
+            "flip_key": self.hotkey.spec,
+            "learn_threshold": self.config.learn_threshold.max(1),
+        })
     }
 
     /// `add WORD`, `rm WORD`, `set KEYS en|ru`. A word given as text belongs
@@ -402,7 +425,7 @@ impl Core {
             // word belongs to `target`. Never learn from excluded apps.
             _ if self.excluded() => false,
             _ => {
-                if let Some(rule) = self.rules.vote(&word, target) {
+                if let Some(rule) = self.rules.vote(&word, target, self.config.learn_threshold) {
                     let mut event = rules::describe(&rule);
                     if self.config.notify {
                         let (en, ru) = (event["en"].as_str().unwrap_or(""), event["ru"].as_str().unwrap_or(""));
@@ -430,9 +453,9 @@ impl Core {
         if !self.held.iter().any(|(k, _)| *k == key) {
             self.held.push((key, Instant::now()));
         }
-        // Alt+Space is the flip hotkey. Hyprland consumes it, so the app
-        // never sees it and the word state stays as it was.
-        if key == KeyCode::KEY_SPACE && self.mods.alt_only() {
+        // The flip hotkey. Hyprland consumes it, so the app never sees it
+        // and the word state stays as it was.
+        if key == self.hotkey.key && self.mods.exactly(&self.hotkey) {
             return;
         }
         self.last_action = None;
@@ -610,6 +633,7 @@ impl Core {
             Msg::FocusChanged(class) => eprintln!("[dbg {t:9.1}] focus → {class:?}, reset"),
             Msg::Layer(ns, open) => eprintln!("[dbg {t:9.1}] layer {ns} {}", if *open { "open" } else { "closed" }),
             Msg::Command(c, _) => eprintln!("[dbg {t:9.1}] command {c:?}"),
+            Msg::HyprConfigReloaded => eprintln!("[dbg {t:9.1}] hyprland config reloaded → rebind hotkey"),
             Msg::HyprGone => eprintln!("[dbg {t:9.1}] hyprland gone"),
         }
     }
@@ -626,4 +650,18 @@ fn notify(body: &str) {
             eprintln!("notify-send: {e}");
         }
     });
+}
+
+/// The configured hotkey, or the default if it doesn't parse.
+fn load_hotkey(config: &Config) -> Hotkey {
+    Hotkey::parse(&config.flip_key).unwrap_or_else(|e| {
+        eprintln!("{e}; using {}", hotkey::DEFAULT);
+        Hotkey::parse(hotkey::DEFAULT).expect("default hotkey parses")
+    })
+}
+
+fn bind_hotkey(hotkey: &Hotkey) {
+    if let Err(e) = hotkey.bind() {
+        eprintln!("binding {} in Hyprland: {e}", hotkey.spec);
+    }
 }

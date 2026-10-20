@@ -65,11 +65,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now layoutless
 ```
 
-Then bind the flip key in `~/.config/hypr/bindings.lua`:
-
-```lua
-o.bind("ALT + SPACE", "Layoutless: flip last word", "layoutless flip")
-```
+The daemon binds the flip key (`Alt+Space` by default, `flip_key` in the config) in Hyprland
+itself and re-binds it after every Hyprland config reload. Don't bind `layoutless flip` in
+`bindings.lua` as well: the flip would run twice and undo itself.
 
 ## Configuration
 
@@ -78,6 +76,8 @@ o.bind("ALT + SPACE", "Layoutless: flip last word", "layoutless flip")
 ```toml
 auto = true                      # auto-correction on start
 notify = true                    # desktop notification when a word is learned
+learn_threshold = 2              # manual flips of the same word that make it a rule
+flip_key = "ALT + SPACE"         # Hyprland syntax; the daemon binds it in Hyprland itself
 exclude_apps = [                 # window classes, as in `hyprctl activewindow`
   "org.keepassxc.KeePassXC", "1Password", "Bitwarden",
   "gcr-prompter", "pinentry-qt", "pinentry-gtk",

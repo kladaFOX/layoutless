@@ -11,6 +11,12 @@ pub struct Config {
     pub auto: bool,
     /// A desktop notification when a word is learned.
     pub notify: bool,
+    /// How many manual flips (or undos of an auto-correction) of the same
+    /// word make it a rule. 1 learns on the first flip.
+    pub learn_threshold: u32,
+    /// Flip hotkey in Hyprland's syntax (`"ALT + SPACE"`, `"CTRL + SHIFT + Q"`,
+    /// `"PAUSE"`). The daemon binds it in Hyprland itself.
+    pub flip_key: String,
     /// Window classes (as in `hyprctl activewindow`) where words are never
     /// auto-corrected. Case-insensitive.
     pub exclude_apps: Vec<String>,
@@ -24,6 +30,8 @@ impl Default for Config {
         Self {
             auto: true,
             notify: true,
+            learn_threshold: 2,
+            flip_key: crate::hotkey::DEFAULT.into(),
             exclude_apps: [
                 "org.keepassxc.KeePassXC",
                 "1Password",

@@ -22,6 +22,8 @@ Panel {
   property bool daemonUp: false
   property bool auto: false
   property int ruleCount: 0
+  property string flipKey: "ALT + SPACE"
+  property int learnThreshold: 2
   // [{keys, en, ru, lang, created_at}], newest first.
   property var rules: []
   // The add field doubles as a filter: the list shows the rules where either
@@ -82,6 +84,8 @@ Panel {
         root.daemonUp = true
         if (ev.event === "state") {
           root.auto = ev.auto === true
+          if (ev.flip_key) root.flipKey = ev.flip_key
+          if (ev.learn_threshold) root.learnThreshold = ev.learn_threshold
           if (ev.rules !== root.ruleCount && root.opened) root.refresh()
           root.ruleCount = ev.rules || 0
         }
@@ -243,7 +247,9 @@ Panel {
           width: parent.width
           wrapMode: Text.Wrap
           textFormat: Text.PlainText
-          text: "No learned words yet. Flip the same word with Alt+Space twice and it's remembered."
+          text: "No learned words yet. Flip the same word with " + root.flipKey
+            + (root.learnThreshold === 1 ? " once" : " " + root.learnThreshold + " times")
+            + " and it's remembered."
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall

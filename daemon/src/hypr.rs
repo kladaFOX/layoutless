@@ -33,6 +33,15 @@ pub fn switch_layout(device: &str, index: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Run Lua in Hyprland's config context (`hyprctl eval`).
+pub fn eval(code: &str) -> std::io::Result<()> {
+    let reply = command(&format!("eval {code}"))?;
+    if reply.trim() != "ok" {
+        return Err(std::io::Error::other(format!("eval: {}", reply.trim())));
+    }
+    Ok(())
+}
+
 /// Class of the focused window ("" if none).
 pub fn active_class() -> std::io::Result<String> {
     let reply = command("j/activewindow")?;
@@ -127,6 +136,10 @@ impl LayoutWatcher {
                 if let Some(rest) = line.strip_prefix("activewindow>>") {
                     let class = rest.split(',').next().unwrap_or("").to_string();
                     let _ = tx.send(Msg::FocusChanged(class));
+                    continue;
+                }
+                if line.starts_with("configreloaded>>") {
+                    let _ = tx.send(Msg::HyprConfigReloaded);
                     continue;
                 }
                 if let Some(ns) = line.strip_prefix("openlayer>>") {
