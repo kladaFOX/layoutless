@@ -2,9 +2,9 @@
 
 Automatic keyboard layout correction for [Omarchy](https://omarchy.org/) / Hyprland, in the spirit of Punto Switcher.
 
-![layoutless](preview.png)
-
 Type without thinking about the layout. When a word comes out in the wrong one (`ghbdtn` → `привет`, `руддщ` → `hello`), layoutless retypes it in the right layout and switches the layout for you.
+
+![Typing Russian and English without switching layouts](demo.gif)
 
 > Status: 0.1, early. Works day to day on the author's machine; expect rough edges.
 
@@ -78,6 +78,8 @@ config. Don't also bind `layoutless flip` yourself: the flip would run twice and
 ```bash
 omarchy plugin add https://github.com/kladaFOX/layoutless --enable
 ```
+
+![The bar widget panel](preview.png)
 
 Left click opens the panel: pause auto-correction, turn it off for the current app, and
 find, add, forget or move learned words to the other layout. Right click pauses or resumes

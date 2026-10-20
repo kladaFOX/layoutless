@@ -19,8 +19,11 @@ pub struct Output {
 impl Output {
     pub fn new() -> std::io::Result<Self> {
         let mut keys = AttributeSet::<KeyCode>::new();
-        for k in keymap::WORD_KEYS {
-            keys.insert(*k);
+        // A key the device doesn't declare is silently dropped by uinput, so
+        // declare everything a replay can contain: a word, its boundary (`/`
+        // is `.` and `,` in ru), and whatever was typed after it.
+        for k in keymap::printable_keys() {
+            keys.insert(k);
         }
         for k in [
             KeyCode::KEY_BACKSPACE,

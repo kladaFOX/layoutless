@@ -1,6 +1,6 @@
 # Maintainer: Ilya Klapatok <klapatok1980@gmail.com>
 pkgname=layoutless
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Punto Switcher-style automatic us/ru keyboard layout correction for Hyprland"
 arch=('x86_64' 'aarch64')
@@ -11,7 +11,7 @@ makedepends=('cargo')
 optdepends=('omarchy: bar widget, install with `omarchy plugin add https://github.com/kladaFOX/layoutless`')
 install=layoutless.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('e8afc94d157af25ba5cb7a384c4bf22e7a3481d074fdce2e1c895e61cc8c57c2')
+sha256sums=('SKIP')
 
 prepare() {
   cd "$pkgname-$pkgver/daemon"

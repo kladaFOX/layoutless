@@ -96,17 +96,6 @@ pub fn classify(s: Stroke) -> KeyClass {
     }
 }
 
-pub const WORD_KEYS: &[KeyCode] = &[
-    KeyCode::KEY_Q, KeyCode::KEY_W, KeyCode::KEY_E, KeyCode::KEY_R, KeyCode::KEY_T,
-    KeyCode::KEY_Y, KeyCode::KEY_U, KeyCode::KEY_I, KeyCode::KEY_O, KeyCode::KEY_P,
-    KeyCode::KEY_LEFTBRACE, KeyCode::KEY_RIGHTBRACE,
-    KeyCode::KEY_A, KeyCode::KEY_S, KeyCode::KEY_D, KeyCode::KEY_F, KeyCode::KEY_G,
-    KeyCode::KEY_H, KeyCode::KEY_J, KeyCode::KEY_K, KeyCode::KEY_L,
-    KeyCode::KEY_SEMICOLON, KeyCode::KEY_APOSTROPHE,
-    KeyCode::KEY_Z, KeyCode::KEY_X, KeyCode::KEY_C, KeyCode::KEY_V, KeyCode::KEY_B,
-    KeyCode::KEY_N, KeyCode::KEY_M, KeyCode::KEY_COMMA, KeyCode::KEY_DOT, KeyCode::KEY_GRAVE,
-];
-
 /// Keys that are letters in en too (not `[ ] ; ' , . \``).
 pub fn is_letter_in_both(key: KeyCode) -> bool {
     TABLE.iter().any(|(k, e, ..)| *k == key && e.is_ascii_lowercase())
@@ -198,4 +187,10 @@ pub fn strokes_for_word(word: &str, lang: Lang) -> Option<Vec<Stroke>> {
     word.chars()
         .map(|c| stroke_for(c, lang).filter(|s| is_word_key(s.key)))
         .collect()
+}
+
+/// Every key that types a character in either layout (letters, digits,
+/// punctuation): what the daemon may have to retype.
+pub fn printable_keys() -> impl Iterator<Item = KeyCode> {
+    TABLE.iter().chain(OTHER).map(|&(k, ..)| k)
 }
