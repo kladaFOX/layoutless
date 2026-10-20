@@ -9,14 +9,17 @@ use evdev::KeyCode;
 use crate::detect::{Detector, Params, Verdict};
 use crate::keymap::{self, KeyClass, Lang, Stroke};
 use crate::output::{Output, VIRTUAL_HYPR_NAME};
+use crate::config::{self, Config};
 use crate::{control, hypr, input};
 
 pub enum Msg {
     Key(KeyCode, i32),
     /// Mouse button press: the caret probably moved.
     Click,
-    /// Another window got focus.
-    FocusChanged,
+    /// Another window got focus; its class.
+    FocusChanged(String),
+    /// A layer-shell surface (shell popup) opened (true) or closed; its namespace.
+    Layer(String, bool),
     /// A control socket command; the reply goes back to the client.
     Command(String, mpsc::Sender<String>),
     /// Hyprland's event socket closed (compositor exited or restarted).
@@ -32,10 +35,21 @@ const FLIP_RELEASE_WAIT: Duration = Duration::from_millis(500);
 /// past the repeat delay has already been repeated by the app (which the
 /// daemon can't see), so then the correction is dropped.
 const REPEAT_MARGIN: Duration = Duration::from_millis(30);
+/// A pending correction gives up after this long or this many keys typed
+/// after the word without a pause.
+const MAX_PENDING: Duration = Duration::from_secs(2);
+const MAX_TAIL: usize = 64;
+/// How often a pending correction checks the held keys.
+const POLL: Duration = Duration::from_millis(10);
 
 pub fn run() -> std::io::Result<()> {
     let debug = std::env::var_os("LAYOUTLESS_DEBUG").is_some();
-    let auto = std::env::var("LAYOUTLESS_AUTO").is_ok_and(|v| v == "1");
+    let config = config::load();
+    let auto = match std::env::var("LAYOUTLESS_AUTO").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => config.auto,
+    };
     let (tx, rx) = mpsc::channel::<Msg>();
 
     // Bind first: it fails if another daemon is already running.
@@ -55,6 +69,9 @@ pub fn run() -> std::io::Result<()> {
         layouts,
         detector,
         auto,
+        app: hypr::active_class().unwrap_or_default(),
+        open_layers: Vec::new(),
+        config,
         correct_wait,
         mods: Mods::default(),
         held: Vec::new(),
@@ -84,7 +101,18 @@ pub fn run() -> std::io::Result<()> {
             }
             match msg {
                 Msg::Key(key, value) => core.key(key, value),
-                Msg::Click | Msg::FocusChanged => core.reset(),
+                Msg::Click => core.reset(),
+                Msg::FocusChanged(class) => {
+                    core.app = class;
+                    core.reset();
+                }
+                Msg::Layer(ns, open) => {
+                    if open {
+                        core.open_layers.push(ns);
+                    } else if let Some(i) = core.open_layers.iter().position(|l| *l == ns) {
+                        core.open_layers.remove(i);
+                    }
+                }
                 Msg::Command(cmd, reply) => core.command(&cmd, reply),
                 Msg::HyprGone => return Err(std::io::Error::other("Hyprland event socket closed")),
             }
@@ -138,15 +166,17 @@ impl Mods {
 enum Pending {
     /// `layoutless flip`, waiting for the hotkey to be released.
     Flip { reply: mpsc::Sender<String>, deadline: Instant },
-    /// An auto-correction waiting for the word's keys to be released. Letters
-    /// typed meanwhile go to `Core::word` and are retyped after the boundary.
-    Correct { word: Vec<Stroke>, boundary: Stroke, target: Lang, deadline: Instant },
+    /// An auto-correction waiting until no key is held. Whatever is typed
+    /// meanwhile (`tail`: letters, spaces, more words) was typed in the same
+    /// wrong layout, so it's erased and retyped after the word too.
+    Correct { word: Vec<Stroke>, boundary: Stroke, target: Lang, tail: Vec<Stroke>, started: Instant },
 }
 
 impl Pending {
     fn deadline(&self) -> Instant {
         match self {
-            Pending::Flip { deadline, .. } | Pending::Correct { deadline, .. } => *deadline,
+            Pending::Flip { deadline, .. } => *deadline,
+            Pending::Correct { .. } => Instant::now() + POLL,
         }
     }
 }
@@ -156,11 +186,16 @@ struct Core {
     layouts: hypr::LayoutWatcher,
     detector: Detector,
     auto: bool,
+    config: Config,
+    /// Class of the focused window.
+    app: String,
+    /// Namespaces of the open layer-shell surfaces.
+    open_layers: Vec<String>,
     /// How long an auto-correction waits for the keys to be released.
     correct_wait: Duration,
     mods: Mods,
-    /// Non-modifier keys physically held right now.
-    held: Vec<KeyCode>,
+    /// Non-modifier keys physically held right now, with press time.
+    held: Vec<(KeyCode, Instant)>,
     /// The word being typed.
     word: Vec<Stroke>,
     /// The word contains digits, `-` or `=`: never auto-correct it.
@@ -189,9 +224,49 @@ impl Core {
             Some(Pending::Flip { reply, .. }) => {
                 let _ = reply.send("cancelled".into());
             }
-            Some(Pending::Correct { .. }) if self.debug => eprintln!("  correction cancelled: typing went on"),
-            _ => {}
+            Some(Pending::Correct { word, boundary, tail, .. }) => {
+                if self.debug {
+                    eprintln!("  correction cancelled: the text changed");
+                }
+                self.replay_state(word, boundary, &tail);
+            }
+            None => {}
         }
+    }
+
+    /// Set the word state as if `word` + `boundary` + `tail` had been typed
+    /// with no auto-correction (none of these words is evaluated again).
+    fn replay_state(&mut self, word: Vec<Stroke>, boundary: Stroke, tail: &[Stroke]) {
+        self.clear_word();
+        self.last = Some((word, boundary));
+        for &s in tail {
+            match keymap::classify(s) {
+                KeyClass::Word | KeyClass::Taint => {
+                    self.word.push(s);
+                    self.tainted |= keymap::classify(s) == KeyClass::Taint;
+                    self.last = None;
+                }
+                KeyClass::Boundary => {
+                    self.last = (!self.word.is_empty()).then(|| (std::mem::take(&mut self.word), s));
+                    self.tainted = false;
+                }
+                KeyClass::Reset => {
+                    self.clear_word();
+                    self.last = None;
+                }
+            }
+        }
+    }
+
+    /// Give up on a pending correction whose text can't be trusted any more
+    /// (a key held long enough for the app to repeat it).
+    fn drop_pending(&mut self, why: &str) {
+        if self.debug {
+            eprintln!("  correction dropped: {why}");
+        }
+        self.pending = None;
+        self.clear_word();
+        self.last = None;
     }
 
     fn command(&mut self, cmd: &str, reply: mpsc::Sender<String>) {
@@ -206,13 +281,26 @@ impl Core {
             "auto off" => self.set_auto(false),
             "auto toggle" => self.set_auto(!self.auto),
             "status" => format!(
-                "auto {}, layout {}",
+                "auto {}, layout {}, app {:?}{}",
                 if self.auto { "on" } else { "off" },
-                self.layouts.current_index()
+                self.layouts.current_index(),
+                self.app,
+                if self.excluded() { " (excluded)" } else { "" },
             ),
+            "reload" => {
+                self.config = config::load();
+                format!("reloaded: {} apps, {} layers excluded", self.config.exclude_apps.len(), self.config.exclude_layers.len())
+            }
             other => format!("unknown command: {other}"),
         };
         let _ = reply.send(answer);
+    }
+
+    /// Auto-correction is off in excluded apps and while an excluded popup
+    /// (the polkit password prompt) is open.
+    fn excluded(&self) -> bool {
+        self.config.exclude_apps.iter().any(|a| a.eq_ignore_ascii_case(&self.app))
+            || self.open_layers.iter().any(|l| self.config.exclude_layers.contains(l))
     }
 
     fn set_auto(&mut self, on: bool) -> String {
@@ -225,11 +313,11 @@ impl Core {
             return;
         }
         if value == 0 {
-            self.held.retain(|k| *k != key);
+            self.held.retain(|(k, _)| *k != key);
             return;
         }
-        if !self.held.contains(&key) {
-            self.held.push(key);
+        if !self.held.iter().any(|(k, _)| *k == key) {
+            self.held.push((key, Instant::now()));
         }
         // Alt+Space is the flip hotkey. Hyprland consumes it, so the app
         // never sees it and the word state stays as it was.
@@ -242,12 +330,21 @@ impl Core {
         // after the modifiers are released start a fresh word.
         let class = if self.mods.chord() { KeyClass::Reset } else { keymap::classify(stroke) };
 
-        // A pending correction tolerates letters (the start of the next word);
-        // anything else means the text changed under it.
-        let tolerated = matches!(self.pending, Some(Pending::Correct { .. })) && class == KeyClass::Word;
-        if !tolerated {
-            self.cancel_pending();
+        // A pending correction absorbs typing (letters, boundaries, Backspace
+        // within what was typed after the word). Anything else means the
+        // caret moved or the text was sent: cancel it.
+        let absorbed = match &mut self.pending {
+            Some(Pending::Correct { tail, .. }) if key == KeyCode::KEY_BACKSPACE => tail.pop().is_some(),
+            Some(Pending::Correct { tail, .. }) if class != KeyClass::Reset && tail.len() < MAX_TAIL => {
+                tail.push(stroke);
+                true
+            }
+            _ => false,
+        };
+        if absorbed {
+            return;
         }
+        self.cancel_pending();
 
         if key == KeyCode::KEY_BACKSPACE {
             if self.word.is_empty() {
@@ -288,16 +385,17 @@ impl Core {
         let word = std::mem::take(&mut self.word);
         let tainted = std::mem::take(&mut self.tainted);
 
-        if self.auto && !tainted {
+        if self.auto && !tainted && !self.excluded() {
             let cur = Lang::from_index(self.layouts.current_index());
             let verdict = self.detector.decide(&word, cur);
             if self.debug {
                 let (en, ru) = keymap::render(&word);
                 eprintln!("  {en} / {ru} typed in {cur:?}: {verdict:?}");
             }
-            if verdict == Verdict::Flip {
-                let deadline = Instant::now() + self.correct_wait;
-                self.pending = Some(Pending::Correct { word, boundary, target: cur.other(), deadline });
+            // Never type on the lock screen. If the state is unknown, don't either.
+            if verdict == Verdict::Flip && !hypr::is_locked().unwrap_or(true) {
+                let (target, tail, started) = (cur.other(), Vec::new(), Instant::now());
+                self.pending = Some(Pending::Correct { word, boundary, target, tail, started });
                 self.last = None;
                 return;
             }
@@ -306,38 +404,40 @@ impl Core {
     }
 
     fn run_pending(&mut self) {
-        let Some(p) = &self.pending else { return };
-        let released = match p {
-            Pending::Flip { .. } => self.held.is_empty() && !self.mods.any(),
-            Pending::Correct { .. } => self.held.is_empty(),
-        };
-        if !released && Instant::now() < p.deadline() {
-            return;
-        }
-        if !released && matches!(p, Pending::Correct { .. }) {
-            if self.debug {
-                eprintln!("  correction dropped: {:?} held past the repeat delay", self.held);
-            }
-            self.pending = None;
-            return;
-        }
-        match self.pending.take().unwrap() {
-            Pending::Flip { reply, .. } => {
-                let answer = self.flip().unwrap_or_else(|e| format!("error: {e}"));
-                if self.debug {
-                    eprintln!("  flip: {answer}");
+        match &self.pending {
+            None => {}
+            Some(Pending::Flip { deadline, .. }) => {
+                let released = self.held.is_empty() && !self.mods.any();
+                if released || Instant::now() >= *deadline {
+                    let Some(Pending::Flip { reply, .. }) = self.pending.take() else { unreachable!() };
+                    let answer = self.flip().unwrap_or_else(|e| format!("error: {e}"));
+                    if self.debug {
+                        eprintln!("  flip: {answer}");
+                    }
+                    let _ = reply.send(answer);
                 }
-                let _ = reply.send(answer);
             }
-            Pending::Correct { word, boundary, target, .. } => {
-                let tail = self.word.clone();
-                match self.retype(word.len() + 1 + tail.len(), &[&word[..], &[boundary], &tail].concat(), target) {
-                    Ok(answer) if self.debug => eprintln!("  corrected: {answer}, tail {}", tail.len()),
-                    Ok(_) => {}
-                    Err(e) => eprintln!("correction failed: {e}"),
+            Some(Pending::Correct { started, .. }) => {
+                let now = Instant::now();
+                if let Some((k, _)) = self.held.iter().find(|(_, t)| now - *t >= self.correct_wait) {
+                    // The app is repeating it by now, and the daemon can't see that.
+                    let why = format!("{k:?} held past the repeat delay");
+                    self.drop_pending(&why);
+                } else if now - *started >= MAX_PENDING {
+                    self.drop_pending("no pause in typing");
+                } else if self.held.is_empty() {
+                    let Some(Pending::Correct { word, boundary, target, tail, .. }) = self.pending.take() else {
+                        unreachable!()
+                    };
+                    let keys = [&word[..], &[boundary], &tail].concat();
+                    match self.retype(keys.len(), &keys, target) {
+                        Ok(answer) if self.debug => eprintln!("  corrected: {answer}, tail {}", tail.len()),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("correction failed: {e}"),
+                    }
+                    // Alt+Space right after a correction flips the word back.
+                    self.replay_state(word, boundary, &tail);
                 }
-                // Alt+Space right after a correction flips the word back.
-                self.last = if tail.is_empty() { Some((word, boundary)) } else { None };
             }
         }
     }
@@ -345,6 +445,9 @@ impl Core {
     /// Retype the current or last word in the other layout. The word state
     /// is kept, so a second flip toggles back.
     fn flip(&mut self) -> std::io::Result<String> {
+        if hypr::is_locked().unwrap_or(true) {
+            return Ok("screen is locked".into());
+        }
         let keys = if !self.word.is_empty() {
             self.word.clone()
         } else if let Some((w, b)) = &self.last {
@@ -382,7 +485,8 @@ impl Core {
                 self.last.as_ref().map(|(w, _)| keymap::render(w).0),
             ),
             Msg::Click => eprintln!("[dbg {t:9.1}] click → reset"),
-            Msg::FocusChanged => eprintln!("[dbg {t:9.1}] focus changed → reset"),
+            Msg::FocusChanged(class) => eprintln!("[dbg {t:9.1}] focus → {class:?}, reset"),
+            Msg::Layer(ns, open) => eprintln!("[dbg {t:9.1}] layer {ns} {}", if *open { "open" } else { "closed" }),
             Msg::Command(c, _) => eprintln!("[dbg {t:9.1}] command {c:?}"),
             Msg::HyprGone => eprintln!("[dbg {t:9.1}] hyprland gone"),
         }

@@ -33,6 +33,20 @@ pub fn switch_layout(device: &str, index: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Class of the focused window ("" if none).
+pub fn active_class() -> std::io::Result<String> {
+    let reply = command("j/activewindow")?;
+    let v: serde_json::Value = serde_json::from_str(&reply).map_err(std::io::Error::other)?;
+    Ok(v["class"].as_str().unwrap_or("").to_string())
+}
+
+/// Whether a session lock (the lock screen) is active.
+pub fn is_locked() -> std::io::Result<bool> {
+    let reply = command("j/locked")?;
+    let v: serde_json::Value = serde_json::from_str(&reply).map_err(std::io::Error::other)?;
+    v["locked"].as_bool().ok_or_else(|| std::io::Error::other(format!("locked: {reply}")))
+}
+
 /// Hyprland's key repeat delay. Apps repeat a held key themselves after it,
 /// and the daemon never sees those repeats.
 pub fn repeat_delay() -> std::io::Result<Duration> {
@@ -110,8 +124,17 @@ impl LayoutWatcher {
         thread::spawn(move || {
             for line in BufReader::new(stream).lines() {
                 let Ok(line) = line else { break };
-                if line.starts_with("activewindow>>") {
-                    let _ = tx.send(Msg::FocusChanged);
+                if let Some(rest) = line.strip_prefix("activewindow>>") {
+                    let class = rest.split(',').next().unwrap_or("").to_string();
+                    let _ = tx.send(Msg::FocusChanged(class));
+                    continue;
+                }
+                if let Some(ns) = line.strip_prefix("openlayer>>") {
+                    let _ = tx.send(Msg::Layer(ns.to_string(), true));
+                    continue;
+                }
+                if let Some(ns) = line.strip_prefix("closelayer>>") {
+                    let _ = tx.send(Msg::Layer(ns.to_string(), false));
                     continue;
                 }
                 let Some(rest) = line.strip_prefix("activelayout>>") else { continue };

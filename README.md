@@ -4,7 +4,7 @@ Automatic keyboard layout correction for [Omarchy](https://omarchy.org/) / Hyprl
 
 Type without thinking about the layout. When a word comes out in the wrong one (`ghbdtn` → `привет`, `руддщ` → `hello`), layoutless retypes it in the right layout and switches the layout for you.
 
-> Status: early development. Manual flip with `Alt+Space` works. Auto-correction works but is off by default (`layoutless auto on`) until the lock-screen and password-field guards are in.
+> Status: early development. Auto-correction and manual flip with `Alt+Space` work. Learning and the bar widget are not there yet.
 
 ## Features
 
@@ -36,7 +36,7 @@ layoutless has to see what you type, so its rules are strict:
 - It keeps only the current and previous word, in memory only. It never logs or sends keystrokes anywhere. The exception is `LAYOUTLESS_DEBUG=1`, a debugging mode that prints every key to stderr: never leave it on.
 - Learned rules (`~/.local/share/layoutless/rules.json`) store only words you flipped by hand. The file is plain JSON, so you can read and edit it.
 - Reading keyboards requires membership in the `input` group, and typing requires write access to `/dev/uinput`. Any program running as your user with these permissions can read every keystroke. That's the cost of a global layout corrector on Wayland.
-- Corrections are off on the lock screen, in password fields (detected via AT-SPI), and in excluded apps (password managers by default). Password fields switch to `us`, like macOS.
+- Corrections are off on the lock screen, in excluded apps (password managers by default) and while the polkit password prompt is open. Words with digits, `-` or `=` are never auto-corrected, which covers most passwords. Password fields elsewhere are not detected: a letters-only password typed in the wrong layout may get corrected, so the login fails and you retype it. Nothing leaks, because nothing is logged.
 
 ## Install
 
@@ -70,6 +70,21 @@ Then bind the flip key in `~/.config/hypr/bindings.lua`:
 ```lua
 o.bind("ALT + SPACE", "Layoutless: flip last word", "layoutless flip")
 ```
+
+## Configuration
+
+`~/.config/layoutless/config.toml` (optional; `layoutless reload` re-reads it):
+
+```toml
+auto = true                      # auto-correction on start
+exclude_apps = [                 # window classes, as in `hyprctl activewindow`
+  "org.keepassxc.KeePassXC", "1Password", "Bitwarden",
+  "gcr-prompter", "pinentry-qt", "pinentry-gtk",
+]
+exclude_layers = ["omarchy-polkit"]  # shell popups, e.g. the polkit password prompt
+```
+
+Commands: `layoutless auto on|off|toggle`, `layoutless status`, `layoutless flip`.
 
 ## License
 
