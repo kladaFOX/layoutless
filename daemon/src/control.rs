@@ -48,13 +48,8 @@ pub fn serve(tx: Sender<Msg>) -> std::io::Result<()> {
 fn handle(stream: UnixStream, tx: &Sender<Msg>) -> std::io::Result<()> {
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line)?;
-    let reply = match line.trim() {
-        "flip" => {
-            let (rtx, rrx) = mpsc::channel();
-            tx.send(Msg::Flip(rtx)).map_err(std::io::Error::other)?;
-            rrx.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|_| "timeout".into())
-        }
-        other => format!("unknown command: {other}"),
-    };
+    let (rtx, rrx) = mpsc::channel();
+    tx.send(Msg::Command(line.trim().to_string(), rtx)).map_err(std::io::Error::other)?;
+    let reply = rrx.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|_| "timeout".into());
     writeln!(&stream, "{reply}")
 }

@@ -47,6 +47,55 @@ const TABLE: &[(KeyCode, char, char, char, char)] = &[
     (KeyCode::KEY_GRAVE, '`', '~', 'ё', 'Ё'),
 ];
 
+/// Printable keys that are not letters in either layout. (key, en, EN, ru, RU)
+const OTHER: &[(KeyCode, char, char, char, char)] = &[
+    (KeyCode::KEY_1, '1', '!', '1', '!'),
+    (KeyCode::KEY_2, '2', '@', '2', '"'),
+    (KeyCode::KEY_3, '3', '#', '3', '№'),
+    (KeyCode::KEY_4, '4', '$', '4', ';'),
+    (KeyCode::KEY_5, '5', '%', '5', '%'),
+    (KeyCode::KEY_6, '6', '^', '6', ':'),
+    (KeyCode::KEY_7, '7', '&', '7', '?'),
+    (KeyCode::KEY_8, '8', '*', '8', '*'),
+    (KeyCode::KEY_9, '9', '(', '9', '('),
+    (KeyCode::KEY_0, '0', ')', '0', ')'),
+    (KeyCode::KEY_MINUS, '-', '_', '-', '_'),
+    (KeyCode::KEY_EQUAL, '=', '+', '=', '+'),
+    (KeyCode::KEY_SLASH, '/', '?', '.', ','),
+    (KeyCode::KEY_BACKSLASH, '\\', '|', '\\', '/'),
+];
+
+/// What a keystroke does to the word being typed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyClass {
+    /// A letter in ru (and a letter or `[ ] ; ' , . \`` in en): part of the word.
+    Word,
+    /// Part of the word, but the word is never auto-corrected: digits, `-`, `=`
+    /// (versions, paths, dates, `кто-то`).
+    Taint,
+    /// Ends the word, and the word may be corrected: Space, Shift+Enter, and
+    /// punctuation that isn't a letter in either layout. Slash is `.` and `,`
+    /// in ru; Shift+digits are `! ? ( ) " ;` and friends.
+    Boundary,
+    /// Anything else: the caret moved or the word is over without correction.
+    Reset,
+}
+
+pub fn classify(s: Stroke) -> KeyClass {
+    use KeyCode as K;
+    match s.key {
+        k if is_word_key(k) => KeyClass::Word,
+        K::KEY_SPACE | K::KEY_SLASH => KeyClass::Boundary,
+        K::KEY_ENTER | K::KEY_KPENTER if s.shift => KeyClass::Boundary,
+        K::KEY_1 | K::KEY_2 | K::KEY_3 | K::KEY_4 | K::KEY_5 | K::KEY_6 | K::KEY_7 | K::KEY_8
+        | K::KEY_9 | K::KEY_0 => {
+            if s.shift { KeyClass::Boundary } else { KeyClass::Taint }
+        }
+        K::KEY_MINUS | K::KEY_EQUAL => KeyClass::Taint,
+        _ => KeyClass::Reset,
+    }
+}
+
 pub const WORD_KEYS: &[KeyCode] = &[
     KeyCode::KEY_Q, KeyCode::KEY_W, KeyCode::KEY_E, KeyCode::KEY_R, KeyCode::KEY_T,
     KeyCode::KEY_Y, KeyCode::KEY_U, KeyCode::KEY_I, KeyCode::KEY_O, KeyCode::KEY_P,
@@ -57,6 +106,11 @@ pub const WORD_KEYS: &[KeyCode] = &[
     KeyCode::KEY_Z, KeyCode::KEY_X, KeyCode::KEY_C, KeyCode::KEY_V, KeyCode::KEY_B,
     KeyCode::KEY_N, KeyCode::KEY_M, KeyCode::KEY_COMMA, KeyCode::KEY_DOT, KeyCode::KEY_GRAVE,
 ];
+
+/// Keys that are letters in en too (not `[ ] ; ' , . \``).
+pub fn is_letter_in_both(key: KeyCode) -> bool {
+    TABLE.iter().any(|(k, e, ..)| *k == key && e.is_ascii_lowercase())
+}
 
 pub fn is_word_key(key: KeyCode) -> bool {
     TABLE.iter().any(|(k, ..)| *k == key)
@@ -73,4 +127,50 @@ pub fn render(word: &[Stroke]) -> (String, String) {
         }
     }
     (en, ru)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lang {
+    En,
+    Ru,
+}
+
+impl Lang {
+    /// Index in Hyprland's `kb_layout` ("us,ru").
+    pub fn index(self) -> usize {
+        match self {
+            Lang::En => 0,
+            Lang::Ru => 1,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Lang {
+        if i == 1 { Lang::Ru } else { Lang::En }
+    }
+
+    pub fn other(self) -> Lang {
+        match self {
+            Lang::En => Lang::Ru,
+            Lang::Ru => Lang::En,
+        }
+    }
+}
+
+/// The keystroke that types `c` in `lang`, if the layout has it.
+pub fn stroke_for(c: char, lang: Lang) -> Option<Stroke> {
+    if c == ' ' {
+        return Some(Stroke { key: KeyCode::KEY_SPACE, shift: false });
+    }
+    TABLE.iter().chain(OTHER).find_map(|&(key, e, eu, r, ru)| {
+        let (lower, upper) = match lang {
+            Lang::En => (e, eu),
+            Lang::Ru => (r, ru),
+        };
+        // Check upper first: for non-letters both can be the same char.
+        if c == upper && c != lower {
+            Some(Stroke { key, shift: true })
+        } else {
+            (c == lower).then_some(Stroke { key, shift: false })
+        }
+    })
 }

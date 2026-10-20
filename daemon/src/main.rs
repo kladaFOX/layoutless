@@ -5,6 +5,8 @@
 
 mod control;
 mod daemon;
+mod detect;
+mod eval;
 mod hypr;
 mod input;
 mod keymap;
@@ -12,13 +14,16 @@ mod output;
 
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: layoutless [daemon | flip]";
+const USAGE: &str = "usage: layoutless [daemon | flip | auto on|off|toggle | status | eval FILE...]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] | ["daemon"] => daemon::run(),
-        ["flip"] => control::request("flip").map(|reply| println!("{reply}")),
+        ["flip"] | ["status"] | ["auto", "on" | "off" | "toggle"] => {
+            control::request(&args.join(" ")).map(|reply| println!("{reply}"))
+        }
+        ["eval", ..] => eval::run(&args[1..]),
         ["-h" | "--help"] => {
             println!("{USAGE}");
             Ok(())

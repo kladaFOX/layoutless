@@ -4,7 +4,7 @@ Automatic keyboard layout correction for [Omarchy](https://omarchy.org/) / Hyprl
 
 Type without thinking about the layout. When a word comes out in the wrong one (`ghbdtn` → `привет`, `руддщ` → `hello`), layoutless retypes it in the right layout and switches the layout for you.
 
-> Status: early development. Manual flip with `Alt+Space` works; auto-correction is not there yet. See [PLAN.md](PLAN.md).
+> Status: early development. Manual flip with `Alt+Space` works. Auto-correction works but is off by default (`layoutless auto on`) until the lock-screen and password-field guards are in.
 
 ## Features
 
@@ -49,7 +49,13 @@ omarchy plugin add https://github.com/kladaFOX/layoutless  # bar widget
 
 ### From source (for now)
 
-You need Rust, the permissions from [PLAN.md → Permissions setup](PLAN.md#permissions-setup), and a re-login.
+You need Rust and these permissions (then re-login):
+
+```bash
+sudo usermod -aG input "$USER"
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/60-layoutless.rules
+echo uinput | sudo tee /etc/modules-load.d/layoutless.conf
+```
 
 ```bash
 cargo build --release --manifest-path daemon/Cargo.toml
@@ -67,4 +73,7 @@ o.bind("ALT + SPACE", "Layoutless: flip last word", "layoutless flip")
 
 ## License
 
-MIT
+MIT for the code. The bundled word lists in `daemon/data/` are derived from
+[hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) (OpenSubtitles 2018)
+and are licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/);
+see [daemon/data/README.md](daemon/data/README.md).

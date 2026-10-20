@@ -33,6 +33,15 @@ pub fn switch_layout(device: &str, index: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Hyprland's key repeat delay. Apps repeat a held key themselves after it,
+/// and the daemon never sees those repeats.
+pub fn repeat_delay() -> std::io::Result<Duration> {
+    let reply = command("j/getoption input:repeat_delay")?;
+    let v: serde_json::Value = serde_json::from_str(&reply).map_err(std::io::Error::other)?;
+    let ms = v["int"].as_u64().ok_or_else(|| std::io::Error::other(format!("repeat_delay: {reply}")))?;
+    Ok(Duration::from_millis(ms))
+}
+
 struct Snapshot {
     /// The real keyboard the current layout is read from.
     reference: String,
