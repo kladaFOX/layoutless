@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: layoutless [daemon | flip | auto on|off|toggle | status | reload
                   | rules [list [--json] | add WORD | rm WORD | set KEYS en|ru]
-                  | subscribe | eval FILE...]";
+                  | exclude add|rm CLASS | subscribe | eval FILE...]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -34,6 +34,7 @@ fn main() -> ExitCode {
             println!("{reply}");
             if reply.starts_with("error") { Err(std::io::Error::other("rules command failed")) } else { Ok(()) }
         }),
+        ["exclude", "add" | "rm", _] => control::request(&args.join(" ")).map(|reply| println!("{reply}")),
         ["subscribe"] => control::subscribe(),
         ["eval", ..] => eval::run(&args[1..]),
         ["-h" | "--help"] => {

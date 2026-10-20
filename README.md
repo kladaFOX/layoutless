@@ -86,7 +86,7 @@ exclude_layers = ["omarchy-polkit"]  # shell popups, e.g. the polkit password pr
 ```
 
 Commands: `layoutless auto on|off|toggle`, `layoutless status`, `layoutless flip`,
-`layoutless rules [list | add WORD | rm WORD]`.
+`layoutless rules [list | add WORD | rm WORD]`, `layoutless exclude add|rm CLASS`.
 
 Learned words live in `~/.local/share/layoutless/rules.json`. `rules add next` makes
 `next` always come out as `next` (typing `туче` turns into it); `rules add привет` does the
@@ -100,8 +100,9 @@ cp manifest.json BarWidget.qml ~/.config/omarchy/plugins/kladafox.layoutless/
 omarchy bar put kladafox.layoutless
 ```
 
-Left click opens the learned words (add, forget, or move a word to the other layout); right
-click pauses or resumes auto-correction. The icon is dimmed while paused.
+Left click opens the panel: pause auto-correction, turn it off for the current app, and
+find, add, forget or move learned words to the other layout. Right click pauses or resumes
+auto-correction. The icon is dimmed while paused.
 
 ## License
 

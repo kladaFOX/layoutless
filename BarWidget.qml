@@ -23,6 +23,11 @@ Panel {
   property bool auto: false
   property int ruleCount: 0
   property string flipKey: "ALT + SPACE"
+  // The focused window's class (the panel itself never takes it) and the
+  // apps where auto-correction is off.
+  property string app: ""
+  property bool appExcluded: false
+  property var excludeApps: []
   property int learnThreshold: 2
   // [{keys, en, ru, lang, created_at}], newest first.
   property var rules: []
@@ -86,6 +91,9 @@ Panel {
           root.auto = ev.auto === true
           if (ev.flip_key) root.flipKey = ev.flip_key
           if (ev.learn_threshold) root.learnThreshold = ev.learn_threshold
+          root.app = ev.app || ""
+          root.appExcluded = ev.app_excluded === true
+          root.excludeApps = ev.exclude_apps || []
           if (ev.rules !== root.ruleCount && root.opened) root.refresh()
           root.ruleCount = ev.rules || 0
         }
@@ -184,6 +192,17 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           onClicked: root.run(["auto", "toggle"])
+        }
+
+        Toggle {
+          visible: root.daemonUp && root.app !== ""
+          width: parent.width
+          label: "Don't correct in " + root.app
+          description: root.flipKey + " still works there"
+          checked: root.appExcluded
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.run(["exclude", root.appExcluded ? "rm" : "add", root.app])
         }
 
         PanelSeparator { visible: root.daemonUp; foreground: root.foreground }
@@ -370,6 +389,55 @@ Panel {
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
+        }
+
+        PanelSeparator { visible: root.daemonUp && root.excludeApps.length > 0; foreground: root.foreground }
+
+        PanelSectionHeader {
+          visible: root.daemonUp && root.excludeApps.length > 0
+          text: "NOT CORRECTED IN (" + root.excludeApps.length + ")"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        Column {
+          visible: root.daemonUp && root.excludeApps.length > 0
+          width: parent.width
+
+          Repeater {
+            model: root.excludeApps
+            delegate: Item {
+              id: appRow
+              required property var modelData
+              width: parent.width
+              height: Style.space(28)
+
+              Text {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
+                anchors.right: removeApp.left
+                anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+                text: appRow.modelData
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              PanelActionButton {
+                id: removeApp
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰆴"
+                foreground: root.dim
+                hoverColor: root.bar ? root.bar.urgent : Color.urgent
+                fontFamily: root.fontFamily
+                onClicked: root.run(["exclude", "rm", appRow.modelData])
+              }
+            }
+          }
         }
       }
     }

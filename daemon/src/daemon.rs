@@ -115,8 +115,12 @@ pub fn run() -> std::io::Result<()> {
                 Msg::Key(key, value) => core.key(key, value),
                 Msg::Click => core.reset(),
                 Msg::FocusChanged(class) => {
+                    let changed = core.app != class;
                     core.app = class;
                     core.reset();
+                    if changed {
+                        core.events.send(&core.state());
+                    }
                 }
                 Msg::Layer(ns, open) => {
                     if open {
@@ -318,6 +322,7 @@ impl Core {
                 serde_json::json!({ "rules": list }).to_string()
             }
             c if c.starts_with("rules ") => self.rules_command(&c["rules ".len()..]),
+            c if c.starts_with("exclude ") => self.exclude_command(&c["exclude ".len()..]),
             "status" => format!(
                 "auto {}, layout {}, app {:?}{}",
                 if self.auto { "on" } else { "off" },
@@ -347,8 +352,31 @@ impl Core {
     /// Auto-correction is off in excluded apps and while an excluded popup
     /// (the polkit password prompt) is open.
     fn excluded(&self) -> bool {
+        self.app_excluded() || self.open_layers.iter().any(|l| self.config.exclude_layers.contains(l))
+    }
+
+    fn app_excluded(&self) -> bool {
         self.config.exclude_apps.iter().any(|a| a.eq_ignore_ascii_case(&self.app))
-            || self.open_layers.iter().any(|l| self.config.exclude_layers.contains(l))
+    }
+
+    /// `add CLASS` / `rm CLASS`: edit `exclude_apps` in the config file.
+    fn exclude_command(&mut self, args: &str) -> String {
+        let mut apps = self.config.exclude_apps.clone();
+        match args.split_once(' ') {
+            Some(("add", class)) if !class.trim().is_empty() => {
+                if !apps.iter().any(|a| a.eq_ignore_ascii_case(class.trim())) {
+                    apps.push(class.trim().to_string());
+                }
+            }
+            Some(("rm", class)) => apps.retain(|a| !a.eq_ignore_ascii_case(class.trim())),
+            _ => return "usage: exclude add CLASS | exclude rm CLASS".into(),
+        }
+        if let Err(e) = config::save_exclude_apps(&apps) {
+            return format!("error: {e}");
+        }
+        self.config = config::load();
+        self.events.send(&self.state());
+        format!("ok, {} apps excluded", self.config.exclude_apps.len())
     }
 
     fn set_auto(&mut self, on: bool) -> String {
@@ -364,6 +392,9 @@ impl Core {
             "rules": self.rules.list().len(),
             "flip_key": self.hotkey.spec,
             "learn_threshold": self.config.learn_threshold.max(1),
+            "app": self.app,
+            "app_excluded": self.app_excluded(),
+            "exclude_apps": self.config.exclude_apps,
         })
     }
 

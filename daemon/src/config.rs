@@ -70,3 +70,29 @@ pub fn load() -> Config {
         }
     }
 }
+
+/// Write `exclude_apps` into the config file, keeping everything else in it
+/// (comments included). Creates the file if needed. A file that doesn't
+/// parse is left alone and reported.
+pub fn save_exclude_apps(apps: &[String]) -> std::io::Result<()> {
+    let path = path().ok_or_else(|| std::io::Error::other("no config directory"))?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))?;
+    let mut list = toml_edit::Array::new();
+    for app in apps {
+        list.push(app.as_str());
+    }
+    doc["exclude_apps"] = toml_edit::value(list);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string())?;
+    std::fs::rename(&tmp, &path)
+}
