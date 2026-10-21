@@ -11,7 +11,7 @@ makedepends=('cargo')
 optdepends=('omarchy: bar widget, install with `omarchy plugin add https://github.com/kladaFOX/layoutless`')
 install=layoutless.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('5263b70e537dd3e07cc590f46481f5663e64e295a31382f58ff9ea137557995c')
 
 prepare() {
   cd "$pkgname-$pkgver/daemon"
