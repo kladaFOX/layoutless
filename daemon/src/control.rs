@@ -67,9 +67,14 @@ pub fn serve(tx: Sender<Msg>, subscribers: Subscribers) -> std::io::Result<()> {
     let listener = UnixListener::bind(&path)?;
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            if let Err(e) = handle(stream, &tx, &subscribers) {
-                eprintln!("control: {e}");
-            }
+            // One thread per connection, so a slow client never holds up the
+            // next command (fast Alt+Space presses arrive back to back).
+            let (tx, subscribers) = (tx.clone(), subscribers.clone());
+            thread::spawn(move || {
+                if let Err(e) = handle(stream, &tx, &subscribers) {
+                    eprintln!("control: {e}");
+                }
+            });
         }
     });
     Ok(())

@@ -31,15 +31,17 @@ pub enum Msg {
     HyprGone,
 }
 
-/// How long a flip may wait for the hotkey to be released. Replaying while
-/// keys are physically held mixes their state into the replay.
-const FLIP_RELEASE_WAIT: Duration = Duration::from_millis(500);
+/// How long a flip may wait for the hotkey to be released, counted from the
+/// last press. Replaying while the hotkey is still held is not safe: an
+/// immediate flip (tried 2026-10-21) made apps repeat Space and Backspace
+/// and wipe the line.
+const FLIP_RELEASE_WAIT: Duration = Duration::from_millis(1500);
 /// Safety margin before Hyprland's repeat delay: an auto-correction waits for
 /// the keys to be released until `repeat_delay - margin`. Replaying a key the
 /// user still holds makes apps drop it as a duplicate press, and a key held
 /// past the repeat delay has already been repeated by the app (which the
 /// daemon can't see), so then the correction is dropped.
-const REPEAT_MARGIN: Duration = Duration::from_millis(30);
+const REPEAT_MARGIN: Duration = Duration::from_millis(10);
 /// A pending correction gives up after this long or this many keys typed
 /// after the word without a pause.
 const MAX_PENDING: Duration = Duration::from_secs(2);
@@ -64,10 +66,7 @@ pub fn run() -> std::io::Result<()> {
     let out = Output::new()?;
     input::watch(tx.clone());
     let layouts = hypr::LayoutWatcher::start(VIRTUAL_HYPR_NAME, tx)?;
-    let correct_wait = hypr::repeat_delay()
-        .unwrap_or(Duration::from_millis(250))
-        .saturating_sub(REPEAT_MARGIN)
-        .max(Duration::from_millis(50));
+    let correct_wait = release_wait();
     let hotkey = load_hotkey(&config);
     bind_hotkey(&hotkey);
     eprintln!("ready, auto mode {}, flip key {}", if auto { "on" } else { "off" }, hotkey.spec);
@@ -130,7 +129,10 @@ pub fn run() -> std::io::Result<()> {
                     }
                 }
                 Msg::Command(cmd, reply) => core.command(&cmd, reply),
-                Msg::HyprConfigReloaded => bind_hotkey(&core.hotkey),
+                Msg::HyprConfigReloaded => {
+                    bind_hotkey(&core.hotkey);
+                    core.correct_wait = release_wait();
+                }
                 Msg::HyprGone => return Err(std::io::Error::other("Hyprland event socket closed")),
             }
         }
@@ -182,8 +184,9 @@ impl Mods {
 }
 
 enum Pending {
-    /// `layoutless flip`, waiting for the hotkey to be released.
-    Flip { reply: mpsc::Sender<String>, deadline: Instant },
+    /// `layoutless flip`, waiting for the hotkey to be released. Holding Alt
+    /// and tapping Space again adds a flip each time; they all run on release.
+    Flip { replies: Vec<mpsc::Sender<String>>, deadline: Instant },
     /// An auto-correction waiting until no key is held. Whatever is typed
     /// meanwhile (`tail`: letters, spaces, more words) was typed in the same
     /// wrong layout, so it's erased and retyped after the word too.
@@ -257,8 +260,10 @@ impl Core {
 
     fn cancel_pending(&mut self) {
         match self.pending.take() {
-            Some(Pending::Flip { reply, .. }) => {
-                let _ = reply.send("cancelled".into());
+            Some(Pending::Flip { replies, .. }) => {
+                for reply in replies {
+                    let _ = reply.send("cancelled".into());
+                }
             }
             Some(Pending::Correct { word, boundary, tail, .. }) => {
                 if self.debug {
@@ -308,9 +313,14 @@ impl Core {
     fn command(&mut self, cmd: &str, reply: mpsc::Sender<String>) {
         let answer = match cmd {
             "flip" => {
-                self.cancel_pending();
                 let deadline = Instant::now() + FLIP_RELEASE_WAIT;
-                self.pending = Some(Pending::Flip { reply, deadline });
+                if let Some(Pending::Flip { replies, deadline: d }) = &mut self.pending {
+                    replies.push(reply);
+                    *d = deadline;
+                } else {
+                    self.cancel_pending();
+                    self.pending = Some(Pending::Flip { replies: vec![reply], deadline });
+                }
                 return;
             }
             "auto on" => self.set_auto(true),
@@ -580,12 +590,15 @@ impl Core {
             Some(Pending::Flip { deadline, .. }) => {
                 let released = self.held.is_empty() && !self.mods.any();
                 if released || Instant::now() >= *deadline {
-                    let Some(Pending::Flip { reply, .. }) = self.pending.take() else { unreachable!() };
-                    let answer = self.flip().unwrap_or_else(|e| format!("error: {e}"));
-                    if self.debug {
-                        eprintln!("  flip: {answer}");
+                    let Some(Pending::Flip { replies, .. }) = self.pending.take() else { unreachable!() };
+                    // One flip per press, in order: an even number toggles back.
+                    for reply in replies {
+                        let answer = self.flip().unwrap_or_else(|e| format!("error: {e}"));
+                        if self.debug {
+                            eprintln!("  flip: {answer}");
+                        }
+                        let _ = reply.send(answer);
                     }
-                    let _ = reply.send(answer);
                 }
             }
             Some(Pending::Correct { started, .. }) => {
@@ -664,7 +677,7 @@ impl Core {
             Msg::FocusChanged(class) => eprintln!("[dbg {t:9.1}] focus → {class:?}, reset"),
             Msg::Layer(ns, open) => eprintln!("[dbg {t:9.1}] layer {ns} {}", if *open { "open" } else { "closed" }),
             Msg::Command(c, _) => eprintln!("[dbg {t:9.1}] command {c:?}"),
-            Msg::HyprConfigReloaded => eprintln!("[dbg {t:9.1}] hyprland config reloaded → rebind hotkey"),
+            Msg::HyprConfigReloaded => eprintln!("[dbg {t:9.1}] hyprland config reloaded → rebind hotkey, re-read repeat delay"),
             Msg::HyprGone => eprintln!("[dbg {t:9.1}] hyprland gone"),
         }
     }
@@ -695,4 +708,13 @@ fn bind_hotkey(hotkey: &Hotkey) {
     if let Err(e) = hotkey.bind() {
         eprintln!("binding {} in Hyprland: {e}", hotkey.spec);
     }
+}
+
+/// How long an auto-correction waits for the keys to be released: just under
+/// Hyprland's current repeat delay.
+fn release_wait() -> Duration {
+    hypr::repeat_delay()
+        .unwrap_or(Duration::from_millis(250))
+        .saturating_sub(REPEAT_MARGIN)
+        .max(Duration::from_millis(50))
 }
