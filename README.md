@@ -47,7 +47,8 @@ layoutless has two parts: the daemon (does the work) and the Omarchy bar widget 
 ### Dependencies
 
 - Hyprland (the daemon talks to its IPC sockets). Omarchy is needed only for the bar widget.
-- `libnotify` for the "word learned" notification, `util-linux` (`setpriv`) for the widget.
+- A notification daemon for the "word learned" notification (Omarchy has one), and
+  `util-linux` (`setpriv`) for the widget.
 - Access to keyboards and `/dev/uinput`: your user in the `input` group, a udev rule and the
   `uinput` module. `install.sh` sets these up.
 - To build: Rust (`omarchy pkg add rustup && rustup default stable`).

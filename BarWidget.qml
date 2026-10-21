@@ -8,7 +8,9 @@ import qs.Ui
 // Layoutless bar widget: a keyboard icon (dimmed while auto-correction is
 // paused) and a panel with the auto toggle and the learned words. All state
 // lives in the layoutless daemon; this widget only talks to it through the
-// `layoutless` CLI: `subscribe` for live state, `rules ...` for edits.
+// `layoutless` CLI: `subscribe` for live state, `ctl` for edits. Commands go
+// to `ctl` on stdin, never as arguments: words in a command line are visible
+// to every local user through `ps`.
 Panel {
   id: root
   moduleName: "kladafox.layoutless"
@@ -57,16 +59,16 @@ Panel {
     if (!listProc.running) listProc.running = true
   }
 
-  function run(args) {
+  function run(cmd) {
     if (actionProc.running) return
-    actionProc.command = ["layoutless"].concat(args)
+    actionProc.pendingCommand = cmd
     actionProc.running = true
   }
 
   function addWord() {
     var word = addField.text.trim()
     if (word === "") return
-    run(["rules", "add", word])
+    run("rules add " + word)
     addField.text = ""
   }
 
@@ -125,6 +127,10 @@ Panel {
 
   Process {
     id: actionProc
+    property string pendingCommand: ""
+    command: ["layoutless", "ctl"]
+    stdinEnabled: true
+    onStarted: write(pendingCommand + "\n")
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -145,7 +151,7 @@ Panel {
       ? "Layoutless: daemon not running"
       : "Layoutless: auto-correction " + (root.auto ? "on" : "paused") + "\nRight click to " + (root.auto ? "pause" : "resume")
     onPressed: function(b) {
-      if (b === Qt.RightButton) root.run(["auto", "toggle"])
+      if (b === Qt.RightButton) root.run("auto toggle")
       else root.toggle()
     }
   }
@@ -191,7 +197,7 @@ Panel {
           checked: root.auto
           foreground: root.foreground
           fontFamily: root.fontFamily
-          onClicked: root.run(["auto", "toggle"])
+          onClicked: root.run("auto toggle")
         }
 
         Toggle {
@@ -202,7 +208,7 @@ Panel {
           checked: root.appExcluded
           foreground: root.foreground
           fontFamily: root.fontFamily
-          onClicked: root.run(["exclude", root.appExcluded ? "rm" : "add", root.app])
+          onClicked: root.run("exclude " + (root.appExcluded ? "rm " : "add ") + root.app)
         }
 
         PanelSeparator { visible: root.daemonUp; foreground: root.foreground }
@@ -365,7 +371,7 @@ Panel {
                 foreground: root.dim
                 fontFamily: root.fontFamily
                 onHovered: function(on) { row.hotButtons += on ? 1 : -1 }
-                onClicked: root.run(["rules", "set", row.modelData.keys, row.modelData.lang === "en" ? "ru" : "en"])
+                onClicked: root.run("rules set " + row.modelData.keys + " " + (row.modelData.lang === "en" ? "ru" : "en"))
               }
 
               PanelActionButton {
@@ -374,7 +380,7 @@ Panel {
                 hoverColor: root.bar ? root.bar.urgent : Color.urgent
                 fontFamily: root.fontFamily
                 onHovered: function(on) { row.hotButtons += on ? 1 : -1 }
-                onClicked: root.run(["rules", "rm", root.wordOf(row.modelData)])
+                onClicked: root.run("rules rm " + root.wordOf(row.modelData))
               }
             }
           }
@@ -434,7 +440,7 @@ Panel {
                 foreground: root.dim
                 hoverColor: root.bar ? root.bar.urgent : Color.urgent
                 fontFamily: root.fontFamily
-                onClicked: root.run(["exclude", "rm", appRow.modelData])
+                onClicked: root.run("exclude rm " + appRow.modelData)
               }
             }
           }

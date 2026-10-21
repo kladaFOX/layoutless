@@ -683,15 +683,28 @@ impl Core {
     }
 }
 
-/// Show a desktop notification without blocking the key path.
+/// Show a desktop notification without blocking the key path. It goes
+/// straight to the notification daemon over D-Bus: the text contains learned
+/// words, and a `notify-send` child would put them in its command line, where
+/// any local user can read them (`ps`, /proc).
 fn notify(body: &str) {
     let body = body.to_string();
     std::thread::spawn(move || {
-        let status = std::process::Command::new("notify-send")
-            .args(["--app-name=layoutless", "--expire-time=3000", "layoutless", &body])
-            .status();
-        if let Err(e) = status {
-            eprintln!("notify-send: {e}");
+        let send = || -> zbus::Result<()> {
+            let conn = zbus::blocking::Connection::session()?;
+            let hints: std::collections::HashMap<&str, zbus::zvariant::Value> = Default::default();
+            conn.call_method(
+                Some("org.freedesktop.Notifications"),
+                "/org/freedesktop/Notifications",
+                Some("org.freedesktop.Notifications"),
+                "Notify",
+                // app name, replaces id, icon, summary, body, actions, hints, timeout (ms)
+                &("layoutless", 0u32, "", "layoutless", body.as_str(), Vec::<&str>::new(), hints, 3000i32),
+            )?;
+            Ok(())
+        };
+        if let Err(e) = send() {
+            eprintln!("notification: {e}");
         }
     });
 }

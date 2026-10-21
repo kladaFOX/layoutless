@@ -132,11 +132,14 @@ impl Rules {
         }
     }
 
-    /// Create or replace the rule for `keys` and forget its votes.
+    /// Create or replace the rule for `keys` and forget its votes. A replaced
+    /// rule keeps its creation time, so it keeps its place in lists sorted
+    /// by it (moving a word to the other layout must not move its row).
     pub fn set(&mut self, keys: &str, lang: Lang) -> Rule {
+        let created_at = self.store.rules.iter().find(|r| r.keys == keys).map_or_else(now, |r| r.created_at);
         self.store.rules.retain(|r| r.keys != keys);
         self.store.votes.retain(|v| v.keys != keys);
-        let rule = Rule { keys: keys.to_string(), lang, created_at: now() };
+        let rule = Rule { keys: keys.to_string(), lang, created_at };
         self.store.rules.push(rule.clone());
         self.save();
         rule

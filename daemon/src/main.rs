@@ -20,7 +20,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: layoutless [daemon | flip | auto on|off|toggle | status | reload
                   | rules [list [--json] | add WORD | rm WORD | set KEYS en|ru]
-                  | exclude add|rm CLASS | subscribe | eval FILE...]";
+                  | exclude add|rm CLASS | ctl (command on stdin) | subscribe | eval FILE...]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -37,6 +37,9 @@ fn main() -> ExitCode {
         }),
         ["exclude", "add" | "rm", _] => control::request(&args.join(" ")).map(|reply| println!("{reply}")),
         ["subscribe"] => control::subscribe(),
+        // One command line read from stdin, so words never show up in this
+        // process's arguments (`ps`, /proc). The bar widget uses this.
+        ["ctl"] => read_command().and_then(|cmd| control::request(&cmd)).map(|reply| println!("{reply}")),
         ["eval", ..] => eval::run(&args[1..]),
         ["-h" | "--help"] => {
             println!("{USAGE}");
@@ -69,4 +72,14 @@ fn print_rules(reply: &str) -> std::io::Result<()> {
         println!("{word:<20} ← {other}");
     }
     Ok(())
+}
+
+fn read_command() -> std::io::Result<String> {
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let cmd = line.trim();
+    if cmd.is_empty() {
+        return Err(std::io::Error::other("ctl: expected a command on stdin"));
+    }
+    Ok(cmd.to_string())
 }
